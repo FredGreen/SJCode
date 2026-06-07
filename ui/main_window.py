@@ -964,6 +964,16 @@ class VideoProcessorApp(QMainWindow):
         layout.addStretch()
         return page
 
+    def _refresh_settings_stats(self):
+        """刷新设置页面的统计数据"""
+        stats = database.get_stats()
+        self.stats_label.setText(
+            f"视频库: {stats['videos']} 条记录\n"
+            f"转文字队列: {stats['transcriptions']} 条记录\n"
+            f"总结记录: {stats['summaries']} 条记录\n"
+            f"关键词历史: {stats['keyword_history']} 条记录"
+        )
+
     def clear_table(self, table_name, display_name):
         reply = QMessageBox.question(
             self,
