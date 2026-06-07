@@ -572,7 +572,27 @@ class VideoProcessorApp(QMainWindow):
             QMessageBox.information(self, "提示", "请先勾选要加入的任务")
             return
 
+        # 检查是否有重复关键词
+        duplicate_keywords = []
+        for row in selected_rows:
+            keyword = self.preview_table.item(row, 1).text()
+            if database.is_keyword_in_history(keyword):
+                duplicate_keywords.append(keyword)
+
+        # 如果有重复关键词，弹出确认对话框
+        if duplicate_keywords:
+            keywords_str = "\n".join([f"  - {kw}" for kw in duplicate_keywords])
+            reply = QMessageBox.question(
+                self, "重复关键词确认",
+                f"以下关键词已在历史记录中：\n{keywords_str}\n\n是否仍要添加这些任务？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         added = 0
+        skipped = 0
         for row in selected_rows:
             keyword = self.preview_table.item(row, 1).text()
             sort_type = self.preview_table.item(row, 2).text()
@@ -581,11 +601,14 @@ class VideoProcessorApp(QMainWindow):
             channel = channel_combo.currentText()
 
             # 添加到数据库
-            database.add_task(keyword, sort_type, int(count_str) if count_str.isdigit() else 5, channel)
-            database.add_keyword_history(keyword)
-            added += 1
+            try:
+                database.add_task(keyword, sort_type, int(count_str) if count_str.isdigit() else 5, channel)
+                database.add_keyword_history(keyword)
+                added += 1
+            except Exception as e:
+                skipped += 1
 
-        self.statusBar.showMessage(f"添加了 {added} 个任务")
+        self.statusBar.showMessage(f"添加了 {added} 个任务" + (f"，跳过 {skipped} 个" if skipped else ""))
         self.refresh_task_table()
 
     def add_all_to_tasks(self):
