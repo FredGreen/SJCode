@@ -412,6 +412,44 @@ def check_keyword_exists(keyword: str) -> bool:
         return cursor.fetchone() is not None
 
 
+# ==================== 数据管理 ====================
+
+def clear_table(table_name: str) -> int:
+    """清空指定表，返回删除的行数"""
+    if table_name not in ['tasks', 'videos', 'transcriptions', 'summaries', 'keyword_history']:
+        raise ValueError(f"无效的表名: {table_name}")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cursor.fetchone()[0]
+        cursor.execute(f"DELETE FROM {table_name}")
+        conn.commit()
+        return count
+
+
+def clear_all_tables() -> dict:
+    """清空所有表，返回每个表删除的行数"""
+    tables = ['tasks', 'videos', 'transcriptions', 'summaries', 'keyword_history']
+    result = {}
+    for table in tables:
+        try:
+            result[table] = clear_table(table)
+        except Exception as e:
+            result[table] = f"错误: {e}"
+    return result
+
+
+def get_all_stats() -> dict:
+    """获取所有表的统计数据"""
+    tables = ['tasks', 'videos', 'transcriptions', 'summaries', 'keyword_history']
+    result = {}
+    for table in tables:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            result[table] = cursor.fetchone()[0]
+    return result
+
 def add_keyword_history(keyword: str):
     """添加或更新关键词历史"""
     with get_connection() as conn:

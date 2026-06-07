@@ -306,7 +306,7 @@ class VideoProcessorApp(QMainWindow):
         self.sidebar = QListWidget()
         self.sidebar.setMaximumWidth(180)
         self.sidebar.setMinimumWidth(150)
-        for item in ["📋 任务配置", "🎬 视频库", "📝 转文字任务", "✨ 提炼总结"]:
+        for item in ["📋 任务配置", "🎬 视频库", "📝 转文字任务", "✨ 提炼总结", "⚙️ 设置"]:
             self.sidebar.addItem(item)
         self.sidebar.currentRowChanged.connect(self.switch_page)
         main_layout.addWidget(self.sidebar)
@@ -319,11 +319,13 @@ class VideoProcessorApp(QMainWindow):
         self.page_video_library = self.create_video_library_page()
         self.page_transcribe = self.create_transcribe_page()
         self.page_summary = self.create_summary_page()
+        self.page_settings = self.create_settings_page()
 
         self.stacked_widget.addWidget(self.page_task_config)
         self.stacked_widget.addWidget(self.page_video_library)
         self.stacked_widget.addWidget(self.page_transcribe)
         self.stacked_widget.addWidget(self.page_summary)
+        self.stacked_widget.addWidget(self.page_settings)
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -860,6 +862,116 @@ class VideoProcessorApp(QMainWindow):
     def on_summary_finished(self, success, msg):
         self.generate_summary_btn.setEnabled(True)
         self.statusBar.showMessage(msg)
+        self.refresh_summary_table()
+
+    # ========== 页面5: 设置 ==========
+    def create_settings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(16)
+
+        # 数据库管理
+        db_group = QGroupBox("数据库管理")
+        db_layout = QVBoxLayout(db_group)
+
+        # 当前状态
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("数据库文件:"))
+        db_path = os.path.join(BASE_DIR, "sjcode.db")
+        db_label = QLabel(db_path)
+        db_label.setStyleSheet("color: #666; font-size: 11px;")
+        status_layout.addWidget(db_label)
+        status_layout.addStretch()
+        db_layout.addLayout(status_layout)
+
+        # 统计信息
+        stats_group = QGroupBox("数据统计")
+        stats_layout = QVBoxLayout(stats_group)
+
+        stats = database.get_all_stats()
+        for key, value in stats.items():
+            row_layout = QHBoxLayout()
+            row_layout.addWidget(QLabel(f"{key}:"))
+            row_layout.addStretch()
+            count_label = QLabel(str(value))
+            count_label.setStyleSheet("font-weight: bold; color: #2c974b;")
+            row_layout.addWidget(count_label)
+            stats_layout.addLayout(row_layout)
+
+        db_layout.addWidget(stats_group)
+
+        # 操作按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        clear_videos_btn = QPushButton("清空视频列表")
+        clear_videos_btn.setObjectName("dangerBtn")
+        clear_videos_btn.clicked.connect(lambda: self.clear_table("videos", "视频列表"))
+        btn_layout.addWidget(clear_videos_btn)
+
+        clear_asr_btn = QPushButton("清空转文字队列")
+        clear_asr_btn.setObjectName("dangerBtn")
+        clear_asr_btn.clicked.connect(lambda: self.clear_table("transcriptions", "转文字队列"))
+        btn_layout.addWidget(clear_asr_btn)
+
+        clear_tasks_btn = QPushButton("清空任务列表")
+        clear_tasks_btn.setObjectName("dangerBtn")
+        clear_tasks_btn.clicked.connect(lambda: self.clear_table("tasks", "任务列表"))
+        btn_layout.addWidget(clear_tasks_btn)
+
+        clear_all_btn = QPushButton("清空所有数据")
+        clear_all_btn.setObjectName("dangerBtn")
+        clear_all_btn.clicked.connect(self.clear_all_data)
+        btn_layout.addWidget(clear_all_btn)
+
+        db_layout.addLayout(btn_layout)
+        layout.addWidget(db_group)
+
+        # 关于
+        about_group = QGroupBox("关于")
+        about_layout = QVBoxLayout(about_group)
+        about_layout.addWidget(QLabel("SJCode - 视频内容处理工作台"))
+        about_layout.addWidget(QLabel("版本: 1.0.0"))
+        about_layout.addWidget(QLabel("功能: B站视频下载 / ASR转文字 / AI提炼总结"))
+        layout.addWidget(about_group)
+
+        layout.addStretch()
+        return page
+
+    def clear_table(self, table_name, display_name):
+        reply = QMessageBox.question(
+            self,
+            "确认清空",
+            f"确定要清空 {display_name} 吗？\n此操作不可恢复。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            database.clear_table(table_name)
+            self.statusBar.showMessage(f"{display_name} 已清空")
+            self.refresh_all_tables()
+
+    def clear_all_data(self):
+        reply = QMessageBox.question(
+            self,
+            "警告：清空所有数据",
+            "确定要清空所有数据吗？\n包括：任务、视频、转文字、提炼记录。\n此操作不可恢复！",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            tables = ['transcriptions', 'summaries', 'videos', 'tasks', 'keyword_history']
+            for table in tables:
+                database.clear_table(table)
+            self.statusBar.showMessage("所有数据已清空")
+            self.refresh_all_tables()
+
+    def refresh_all_tables(self):
+        """刷新所有表格"""
+        self.refresh_task_table()
+        self.refresh_history_table()
+        self.refresh_asr_table()
+        self.refresh_transcription_table()
         self.refresh_summary_table()
 
 
