@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-SJCode 桌面应用 - 主窗口
+SJCode 视频内容处理工作台 - 主窗口
 
 功能：
   - Excel 任务上传和管理
   - B站视频下载
   - 视频列表展示和 ASR 队列管理
-  - 任务进度跟踪
-  - 关键词历史记录
+  - 视频转 Markdown（ASR + LLM）
+  - 商机提炼总结
+  - 多页面导航布局
 """
 
 import os
 import sys
 import json
-import openpyxl
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -21,24 +22,27 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QCheckBox,
-    QProgressBar, QFileDialog, QMessageBox, QGroupBox, QScrollArea,
-    QStatusBar, QListWidget, QListWidgetItem, QAbstractItemView
+    QFileDialog, QMessageBox, QGroupBox, QHeaderView, QAbstractItemView,
+    QStatusBar, QListWidget, QStackedWidget, QComboBox, QProgressBar,
+    QLineEdit
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor
 
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config.settings import OUTPUT_DIR
+from config.settings import (
+    OUTPUT_DIR, VIDEOS_DIR, TASKS_DIR, HISTORY_DIR,
+    DOCS_DIR, SUMMARY_DIR, ASR_CACHE_DIR
+)
+from config.settings import VIDEO
 
 
 # ===================== 配置路径 =====================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-TASKS_DIR = BASE_DIR / "output" / "tasks"
-HISTORY_FILE = BASE_DIR / "output" / "history" / "keywords_history.json"
-VIDEOS_DIR = BASE_DIR / "output" / "video"
+HISTORY_FILE = HISTORY_DIR / "keywords_history.json"
 
 
 # ===================== 关键词历史管理 =====================
@@ -48,7 +52,7 @@ class KeywordHistory:
 
     def __init__(self, history_file: Path):
         self.history_file = history_file
-        self.keywords: dict[str, dict] = {}  # keyword -> {date, count, status}
+        self.keywords: dict[str, dict] = {}
         self._load()
 
     def _load(self):
@@ -94,9 +98,10 @@ class KeywordHistory:
 
 class DownloadWorker(QThread):
     """视频下载工作线程"""
-    progress = Signal(str)  # 发送进度信息
-    finished = Signal(bool, str)  # 完成信号
-    video_added = Signal(dict)  # 新视频添加信号
+    progress = Signal(str)
+    finished = Signal(bool, str)
+    video_added = Signal(dict)
+    progress_value = Signal(int, int)  # current, total
 
     def __init__(self, tasks: list[dict], parent=None):
         super().__init__(parent)
@@ -104,7 +109,6 @@ class DownloadWorker(QThread):
         self._running = True
 
     def run(self):
-        """执行下载任务"""
         try:
             for i, task in enumerate(self.tasks):
                 if not self._running:
@@ -115,8 +119,8 @@ class DownloadWorker(QThread):
                 limit = task.get("limit", 5)
 
                 self.progress.emit(f"[{i+1}/{len(self.tasks)}] 开始下载: {keyword}")
+                self.progress_value.emit(i + 1, len(self.tasks))
 
-                # 导入并执行下载（复用现有代码）
                 from core.bilibili_search_download_v2_ui import download_keyword_videos
                 videos = download_keyword_videos(
                     keyword, order=order, limit=limit,
@@ -134,8 +138,55 @@ class DownloadWorker(QThread):
             self.finished.emit(False, f"下载失败: {str(e)}")
 
     def stop(self):
-        """停止下载"""
         self._running = False
+
+
+# ===================== ASR 处理线程 =====================
+
+class ASRWorker(QThread):
+    """ASR 处理线程"""
+    progress = Signal(str)
+    finished = Signal(bool, str)
+
+    def __init__(self, video_path: str, parent=None):
+        super().__init__(parent)
+        self.video_path = video_path
+
+    def run(self):
+        try:
+            self.progress.emit(f"正在处理: {Path(self.video_path).name}")
+            result = subprocess.run(
+                [sys.executable, "-m", "parser.main", self.video_path],
+                capture_output=True, text=True, cwd=str(BASE_DIR),
+                timeout=600
+            )
+            if result.returncode == 0:
+                self.finished.emit(True, "ASR 处理完成")
+            else:
+                self.finished.emit(False, f"处理失败: {result.stderr[:100]}")
+        except Exception as e:
+            self.finished.emit(False, f"错误: {str(e)}")
+
+
+# ===================== 提炼总结线程 =====================
+
+class SummaryWorker(QThread):
+    """提炼总结线程"""
+    progress = Signal(str)
+    finished = Signal(bool, str)
+
+    def __init__(self, input_file: str, parent=None):
+        super().__init__(parent)
+        self.input_file = input_file
+
+    def run(self):
+        try:
+            self.progress.emit(f"正在提炼: {Path(self.input_file).name}")
+            from parser.summary import summarize_file
+            result = summarize_file(self.input_file)
+            self.finished.emit(True, f"提炼完成: {result}")
+        except Exception as e:
+            self.finished.emit(False, f"错误: {str(e)}")
 
 
 # ===================== 主窗口 =====================
@@ -145,483 +196,649 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.keyword_history = KeywordHistory(HISTORY_FILE)
         self.download_worker: Optional[DownloadWorker] = None
+        self.asr_worker: Optional[ASRWorker] = None
+        self.summary_worker: Optional[SummaryWorker] = None
+
         self.current_tasks: list[dict] = []
-        self.video_list: list[dict] = []  # 当前视频列表
-        self.asr_queue: list[dict] = []   # ASR 待处理队列
+        self.preview_data: list[dict] = []
+        self.video_list: list[dict] = []
+        self.asr_queue: list[dict] = []
 
-        self._init_ui()
-        self._load_video_history()
+        self.channel_options = ["B站", "抖音", "YouTube"]
 
-    def _init_ui(self):
+        self.setWindowTitle("SJCode 视频内容处理工作台")
+        self.setMinimumSize(1300, 900)
+
+        self.setup_ui()
+        self.apply_styles()
+        self.refresh_all_tables()
+
+        self.statusBar().showMessage("就绪 | 流程: 配置任务 → 抓取视频 → ASR转文字 → AI提炼总结")
+
+    def setup_ui(self):
         """初始化 UI"""
-        self.setWindowTitle("SJCode - 视频内容处理工具")
-        self.setGeometry(100, 100, 1200, 800)
-
-        # 创建中央部件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # 主布局
-        main_layout = QVBoxLayout(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # 1. 任务上传区域
-        task_group = self._create_task_group()
-        main_layout.addWidget(task_group)
+        # 左侧导航菜单
+        self.sidebar = QListWidget()
+        self.sidebar.setMaximumWidth(180)
+        self.sidebar.setMinimumWidth(150)
+        for item in ["📋 任务配置", "🎬 视频库", "📝 转文字任务", "✨ 提炼总结"]:
+            self.sidebar.addItem(item)
+        self.sidebar.currentRowChanged.connect(self.switch_page)
+        main_layout.addWidget(self.sidebar)
 
-        # 2. 下载控制区域
-        download_group = self._create_download_group()
-        main_layout.addWidget(download_group)
+        # 右侧堆叠区域
+        self.stacked_widget = QStackedWidget()
+        main_layout.addWidget(self.stacked_widget, 1)
 
-        # 3. 视频列表区域
-        video_group = self._create_video_group()
-        main_layout.addWidget(video_group)
+        # 创建各页面
+        self.page_task_config = self.create_task_config_page()
+        self.page_video_library = self.create_video_library_page()
+        self.page_transcribe = self.create_transcribe_page()
+        self.page_summary = self.create_summary_page()
 
-        # 4. 进度区域
-        progress_group = self._create_progress_group()
-        main_layout.addWidget(progress_group)
+        self.stacked_widget.addWidget(self.page_task_config)
+        self.stacked_widget.addWidget(self.page_video_library)
+        self.stacked_widget.addWidget(self.page_transcribe)
+        self.stacked_widget.addWidget(self.page_summary)
 
         # 状态栏
-        self.statusBar().showMessage("就绪")
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
 
-    def _create_task_group(self) -> QGroupBox:
-        """创建任务上传区域"""
-        group = QGroupBox("任务管理")
-        layout = QVBoxLayout()
+    def apply_styles(self):
+        """应用样式表"""
+        self.setStyleSheet("""
+            QMainWindow { background-color: #f5f7fa; }
+            QGroupBox { font-weight: bold; border: 1px solid #d0d7de; border-radius: 6px; margin-top: 10px; padding-top: 10px; background-color: white; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; color: #24292f; }
+            QPushButton { background-color: #2c974b; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #2c6e3f; }
+            QPushButton:pressed { background-color: #1b4d2a; }
+            QPushButton#secondaryBtn { background-color: #6c757d; }
+            QPushButton#secondaryBtn:hover { background-color: #5a6268; }
+            QPushButton#dangerBtn { background-color: #d73a49; }
+            QPushButton#dangerBtn:hover { background-color: #b31d28; }
+            QPushButton:disabled { background-color: #cccccc; color: #888888; }
+            QTableWidget { border: 1px solid #e1e4e8; border-radius: 4px; alternate-background-color: #f8f9fa; gridline-color: #e1e4e8; }
+            QHeaderView::section { background-color: #f6f8fa; padding: 4px; border: none; border-right: 1px solid #e1e4e8; border-bottom: 1px solid #e1e4e8; font-weight: bold; }
+            QComboBox, QLineEdit { padding: 4px; border: 1px solid #d0d7de; border-radius: 4px; }
+            QListWidget { background-color: white; border: none; border-right: 1px solid #e1e4e8; outline: none; }
+            QListWidget::item { padding: 12px 8px; border-bottom: 1px solid #e1e4e8; }
+            QListWidget::item:selected { background-color: #e2e6ea; color: #24292f; }
+            QListWidget::item:hover { background-color: #f0f2f4; }
+            QProgressBar { border: 1px solid #d0d7de; border-radius: 4px; text-align: center; }
+            QProgressBar::chunk { background-color: #2c974b; border-radius: 3px; }
+            QLabel { color: #24292f; }
+        """)
 
-        # 上传和预览布局
+    def switch_page(self, index):
+        """切换页面"""
+        self.stacked_widget.setCurrentIndex(index)
+
+    # ==================== 页面1: 任务配置 ====================
+
+    def create_task_config_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        # 上传区域
+        upload_group = QGroupBox("📂 上传Excel文件 (列：检索关键词, 排序, TOP-N)")
+        upload_layout = QHBoxLayout(upload_group)
+        self.upload_btn = QPushButton("选择文件")
+        self.upload_btn.clicked.connect(self.upload_excel)
+        self.file_label = QLabel("未选择文件")
+        upload_layout.addWidget(self.upload_btn)
+        upload_layout.addWidget(self.file_label)
+        upload_layout.addStretch()
+        layout.addWidget(upload_group)
+
+        # 预览表格
+        preview_group = QGroupBox("📄 Excel数据预览 (勾选行，选择渠道后加入任务)")
+        preview_layout = QVBoxLayout(preview_group)
+        self.preview_table = QTableWidget()
+        self.preview_table.setColumnCount(5)
+        self.preview_table.setHorizontalHeaderLabels(["选择", "检索关键词", "排序", "TOP-N", "渠道"])
+        self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        preview_layout.addWidget(self.preview_table)
+
         btn_layout = QHBoxLayout()
-
-        self.btn_upload = QPushButton("📁 上传 Excel 任务")
-        self.btn_upload.clicked.connect(self._upload_excel)
-        btn_layout.addWidget(self.btn_upload)
-
-        self.btn_preview = QPushButton("🔍 预览任务列表")
-        self.btn_preview.clicked.connect(self._preview_tasks)
-        btn_layout.addWidget(self.btn_preview)
-
-        self.btn_clear = QPushButton("🗑️ 清空任务")
-        self.btn_clear.clicked.connect(self._clear_tasks)
-        btn_layout.addWidget(self.btn_clear)
-
-        layout.addLayout(btn_layout)
-
-        # 任务列表显示
-        self.task_table = QTableWidget()
-        self.task_table.setColumnCount(4)
-        self.task_table.setHorizontalHeaderLabels(["关键词", "排序方式", "数量", "状态"])
-        self.task_table.setMaximumHeight(120)
-        layout.addWidget(self.task_table)
-
-        # 历史记录
-        history_layout = QHBoxLayout()
-        history_layout.addWidget(QLabel("已处理关键词:"))
-        self.history_list = QListWidget()
-        self.history_list.setMaximumHeight(60)
-        self.history_list.addItems(list(self.keyword_history.get_all().keys()))
-        history_layout.addWidget(self.history_list)
-        layout.addLayout(history_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_download_group(self) -> QGroupBox:
-        """创建下载控制区域"""
-        group = QGroupBox("视频下载")
-        layout = QHBoxLayout()
-
-        self.checkbox_bilibili = QCheckBox("B站下载")
-        self.checkbox_bilibili.setChecked(True)
-        layout.addWidget(self.checkbox_bilibili)
-
-        self.btn_start_download = QPushButton("▶️ 开始下载")
-        self.btn_start_download.clicked.connect(self._start_download)
-        self.btn_start_download.setEnabled(False)
-        layout.addWidget(self.btn_start_download)
-
-        self.btn_stop_download = QPushButton("⏹️ 停止下载")
-        self.btn_stop_download.clicked.connect(self._stop_download)
-        self.btn_stop_download.setEnabled(False)
-        layout.addWidget(self.btn_stop_download)
-
-        layout.addStretch()
-
-        self.download_status = QLabel("等待上传任务...")
-        layout.addWidget(self.download_status)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_video_group(self) -> QGroupBox:
-        """创建视频列表区域"""
-        group = QGroupBox("已下载视频列表")
-        layout = QVBoxLayout()
-
-        # 视频列表
-        self.video_table = QTableWidget()
-        self.video_table.setColumnCount(7)
-        self.video_table.setHorizontalHeaderLabels([
-            "选择", "视频名称", "关键词", "时长", "大小", "收藏数", "状态"
-        ])
-        self.video_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        layout.addWidget(self.video_table)
-
-        # 操作按钮
-        btn_layout = QHBoxLayout()
-
-        self.btn_refresh_videos = QPushButton("🔄 刷新列表")
-        self.btn_refresh_videos.clicked.connect(self._refresh_videos)
-        btn_layout.addWidget(self.btn_refresh_videos)
-
-        self.btn_add_to_asr = QPushButton("📝 加入 ASR 队列")
-        self.btn_add_to_asr.clicked.connect(self._add_to_asr_queue)
-        btn_layout.addWidget(self.btn_add_to_asr)
-
-        self.btn_start_asr = QPushButton("🎤 开始语音转文字")
-        self.btn_start_asr.clicked.connect(self._start_asr)
-        btn_layout.addWidget(self.btn_start_asr)
-
+        self.add_selected_btn = QPushButton("✅ 将选中行加入待执行任务")
+        self.add_selected_btn.clicked.connect(self.add_selected_to_tasks)
+        self.add_all_btn = QPushButton("📌 全部加入待执行任务")
+        self.add_all_btn.clicked.connect(self.add_all_to_tasks)
+        btn_layout.addWidget(self.add_selected_btn)
+        btn_layout.addWidget(self.add_all_btn)
         btn_layout.addStretch()
+        preview_layout.addLayout(btn_layout)
+        layout.addWidget(preview_group)
 
-        layout.addLayout(btn_layout)
+        # 待执行任务表格
+        task_group = QGroupBox("⏳ 待执行任务列表")
+        task_layout = QVBoxLayout(task_group)
+        self.task_table = QTableWidget()
+        self.task_table.setColumnCount(6)
+        self.task_table.setHorizontalHeaderLabels(["关键词", "排序方式", "数量", "渠道", "状态", "操作"])
+        self.task_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.task_table.setAlternatingRowColors(True)
+        task_layout.addWidget(self.task_table)
 
-        # ASR 队列
-        asr_layout = QHBoxLayout()
-        asr_layout.addWidget(QLabel("ASR 队列:"))
-        self.asr_queue_list = QListWidget()
-        self.asr_queue_list.setMaximumHeight(50)
-        asr_layout.addWidget(self.asr_queue_list)
-        layout.addLayout(asr_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_progress_group(self) -> QGroupBox:
-        """创建进度显示区域"""
-        group = QGroupBox("任务进度")
-        layout = QVBoxLayout()
-
+        action_layout = QHBoxLayout()
+        self.clear_pending_btn = QPushButton("🗑️ 清空未执行任务")
+        self.clear_pending_btn.setObjectName("dangerBtn")
+        self.clear_pending_btn.clicked.connect(self.clear_pending_tasks)
+        self.start_crawl_btn = QPushButton("🚀 开启抓取视频任务")
+        self.start_crawl_btn.clicked.connect(self.start_crawling)
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumHeight(20)
-        layout.addWidget(self.progress_bar)
+        action_layout.addWidget(self.clear_pending_btn)
+        action_layout.addWidget(self.progress_bar)
+        action_layout.addStretch()
+        action_layout.addWidget(self.start_crawl_btn)
+        task_layout.addLayout(action_layout)
+        layout.addWidget(task_group)
 
-        self.log_text = QLabel()
-        self.log_text.setWordWrap(True)
-        self.log_text.setStyleSheet("background-color: #f5f5f5; padding: 5px;")
-        layout.addWidget(self.log_text)
+        return page
 
-        group.setLayout(layout)
-        return group
+    # ==================== 页面2: 视频库 ====================
 
-    # ===================== 事件处理 =====================
-
-    def _upload_excel(self):
-        """上传 Excel 文件"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择 Excel 文件", "",
-            "Excel 文件 (*.xlsx *.xls);;所有文件 (*)"
+    def create_video_library_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        video_group = QGroupBox("🎬 历史下载视频库")
+        video_layout = QVBoxLayout(video_group)
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(9)
+        self.history_table.setHorizontalHeaderLabels(
+            ["选择", "视频名称", "关键词", "大小(MB)", "时长", "收藏数", "播放量", "状态", "操作"]
         )
+        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        video_layout.addWidget(self.history_table)
 
-        if not file_path:
+        btn_layout = QHBoxLayout()
+        self.refresh_videos_btn = QPushButton("🔄 刷新列表")
+        self.refresh_videos_btn.setObjectName("secondaryBtn")
+        self.refresh_videos_btn.clicked.connect(self.refresh_videos)
+        self.add_to_asr_btn = QPushButton("🎤 将选中视频加入转文字任务(ASR)")
+        self.add_to_asr_btn.clicked.connect(self.add_selected_videos_to_asr)
+        btn_layout.addWidget(self.refresh_videos_btn)
+        btn_layout.addWidget(self.add_to_asr_btn)
+        btn_layout.addStretch()
+        video_layout.addLayout(btn_layout)
+        layout.addWidget(video_group)
+        return page
+
+    # ==================== 页面3: 转文字任务 ====================
+
+    def create_transcribe_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        asr_group = QGroupBox("🎙️ 视频转文字任务列表 (ASR队列)")
+        asr_layout = QVBoxLayout(asr_group)
+        self.asr_table = QTableWidget()
+        self.asr_table.setColumnCount(4)
+        self.asr_table.setHorizontalHeaderLabels(["视频名称", "关键词", "状态", "操作"])
+        self.asr_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.asr_table.setAlternatingRowColors(True)
+        asr_layout.addWidget(self.asr_table)
+        self.start_transcribe_btn = QPushButton("🔄 开启视频转文章任务")
+        self.start_transcribe_btn.clicked.connect(self.start_transcription)
+        asr_layout.addWidget(self.start_transcribe_btn)
+        layout.addWidget(asr_group)
+
+        trans_group = QGroupBox("📄 已生成的转文字文件列表")
+        trans_layout = QVBoxLayout(trans_group)
+        self.transcription_table = QTableWidget()
+        self.transcription_table.setColumnCount(4)
+        self.transcription_table.setHorizontalHeaderLabels(["文件名", "来源视频", "创建时间", "操作"])
+        self.transcription_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        trans_layout.addWidget(self.transcription_table)
+        self.refresh_trans_btn = QPushButton("🔄 刷新文件列表")
+        self.refresh_trans_btn.setObjectName("secondaryBtn")
+        self.refresh_trans_btn.clicked.connect(self.refresh_transcription_files)
+        trans_layout.addWidget(self.refresh_trans_btn)
+        layout.addWidget(trans_group)
+        return page
+
+    # ==================== 页面4: 提炼总结 ====================
+
+    def create_summary_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        summary_group = QGroupBox("✨ AI提炼总结文件列表")
+        summary_layout = QVBoxLayout(summary_group)
+        self.summary_table = QTableWidget()
+        self.summary_table.setColumnCount(4)
+        self.summary_table.setHorizontalHeaderLabels(["总结文件名", "源文件", "创建时间", "操作"])
+        self.summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.summary_table.setAlternatingRowColors(True)
+        summary_layout.addWidget(self.summary_table)
+        btn_layout = QHBoxLayout()
+        self.generate_summary_btn = QPushButton("🧠 开启提炼总结 (基于转文字文件)")
+        self.generate_summary_btn.clicked.connect(self.generate_summary_from_trans)
+        self.refresh_summary_btn = QPushButton("🔄 刷新文件列表")
+        self.refresh_summary_btn.setObjectName("secondaryBtn")
+        self.refresh_summary_btn.clicked.connect(self.refresh_summary_files)
+        btn_layout.addWidget(self.generate_summary_btn)
+        btn_layout.addWidget(self.refresh_summary_btn)
+        btn_layout.addStretch()
+        summary_layout.addLayout(btn_layout)
+        layout.addWidget(summary_group)
+        return page
+
+    # ==================== 功能方法 ====================
+
+    def refresh_all_tables(self):
+        """刷新所有表格"""
+        self.refresh_task_table()
+        self.refresh_videos()
+        self.refresh_asr_table()
+        self.refresh_transcription_files()
+        self.refresh_summary_files()
+
+    # --- Excel 处理 ---
+
+    def upload_excel(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择Excel文件", "", "Excel Files (*.xlsx *.xls)"
+        )
+        if file_path:
+            self.file_label.setText(file_path)
+            self.load_excel_preview(file_path)
+
+    def load_excel_preview(self, file_path):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(file_path)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if len(rows) < 2:
+                QMessageBox.warning(self, "警告", "Excel至少需要标题行和数据行")
+                return
+
+            headers = rows[0]
+            col_indices = {}
+            for i, h in enumerate(headers):
+                if h and str(h) in ["检索关键词", "排序", "TOP-N"]:
+                    col_indices[str(h)] = i
+
+            # 兼容：如果列名不一致，默认按顺序取前三列
+            if len(col_indices) < 3:
+                QMessageBox.information(self, "提示", "将按顺序读取前三列：关键词、排序、数量")
+                col_indices = {"检索关键词": 0, "排序": 1, "TOP-N": 2}
+
+            self.preview_data = []
+            for row in rows[1:]:
+                if len(row) > max(col_indices.values()):
+                    keyword = row[col_indices["检索关键词"]]
+                    sort_type = row[col_indices["排序"]] if col_indices.get("排序", 1) < len(row) else ""
+                    topn = row[col_indices["TOP-N"]] if col_indices.get("TOP-N", 2) < len(row) else 5
+                    if keyword:
+                        self.preview_data.append({
+                            "keyword": str(keyword),
+                            "sort": str(sort_type) if sort_type else "totalrank",
+                            "count": str(topn) if topn else "5"
+                        })
+
+            self.preview_table.setRowCount(len(self.preview_data))
+            for idx, data in enumerate(self.preview_data):
+                chk = QCheckBox()
+                self.preview_table.setCellWidget(idx, 0, chk)
+                self.preview_table.setItem(idx, 1, QTableWidgetItem(data["keyword"]))
+                self.preview_table.setItem(idx, 2, QTableWidgetItem(data["sort"]))
+                self.preview_table.setItem(idx, 3, QTableWidgetItem(data["count"]))
+                channel_combo = QComboBox()
+                channel_combo.addItems(self.channel_options)
+                channel_combo.setCurrentText("B站")
+                self.preview_table.setCellWidget(idx, 4, channel_combo)
+
+            self.status_bar.showMessage(f"已加载 {len(self.preview_data)} 行数据，请勾选并选择渠道后加入任务")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"读取Excel失败: {str(e)}")
+
+    def add_selected_to_tasks(self):
+        selected_rows = []
+        for row in range(self.preview_table.rowCount()):
+            chk_widget = self.preview_table.cellWidget(row, 0)
+            if chk_widget and chk_widget.isChecked():
+                selected_rows.append(row)
+
+        if not selected_rows:
+            QMessageBox.information(self, "提示", "请先在预览表格中勾选要加入的任务")
             return
 
+        added = 0
+        for row in selected_rows:
+            keyword = self.preview_table.item(row, 1).text()
+            sort_type = self.preview_table.item(row, 2).text()
+            count_str = self.preview_table.item(row, 3).text()
+            channel_combo = self.preview_table.cellWidget(row, 4)
+            channel = channel_combo.currentText()
+            self._add_task(keyword, sort_type, count_str, channel)
+            added += 1
+
+        self.status_bar.showMessage(f"添加了 {added} 个任务")
+        self.refresh_task_table()
+
+    def add_all_to_tasks(self):
+        self.preview_table.selectAll()
+        for row in range(self.preview_table.rowCount()):
+            chk_widget = self.preview_table.cellWidget(row, 0)
+            if chk_widget:
+                chk_widget.setChecked(True)
+        self.add_selected_to_tasks()
+
+    def _add_task(self, keyword: str, sort_type: str, count_str: str, channel: str):
+        """添加任务"""
+        # 检查是否重复
+        for task in self.current_tasks:
+            if task["keyword"] == keyword and task.get("status") != "completed":
+                return
+
         try:
-            wb = openpyxl.load_workbook(file_path)
-            ws = wb.active
+            count = int(count_str) if count_str else 5
+        except ValueError:
+            count = 5
 
-            # 解析 Excel（跳过表头）
-            tasks = []
-            duplicates = []
+        self.current_tasks.append({
+            "keyword": keyword,
+            "order": sort_type or "totalrank",
+            "limit": count,
+            "channel": channel,
+            "status": "pending"
+        })
 
-            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-                if not row or not row[0]:
-                    continue
-
-                keyword = str(row[0]).strip()
-                if not keyword:
-                    continue
-
-                order = str(row[1]) if len(row) > 1 and row[1] else "totalrank"
-                limit = int(row[2]) if len(row) > 2 and row[2] else 5
-
-                # 检查是否重复
-                is_dup = self.keyword_history.is_processed(keyword)
-                if is_dup:
-                    duplicates.append(keyword)
-
-                tasks.append({
-                    "keyword": keyword,
-                    "order": order,
-                    "limit": limit,
-                    "is_duplicate": is_dup
-                })
-
-            self.current_tasks = tasks
-            self._display_tasks()
-
-            # 保存到 output/tasks
-            TASKS_DIR.mkdir(parents=True, exist_ok=True)
-            original_name = Path(file_path).name
-            dest_path = TASKS_DIR / original_name
-            import shutil
-            shutil.copy(file_path, dest_path)
-
-            msg = f"已加载 {len(tasks)} 个任务"
-            if duplicates:
-                msg += f"\n⚠️ 警告: {len(duplicates)} 个关键词已处理过: {', '.join(duplicates)}"
-                QMessageBox.warning(self, "重复关键词", msg)
-            else:
-                self.statusBar().showMessage(msg)
-
-            self.btn_start_download.setEnabled(len(tasks) > 0)
-
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"读取 Excel 失败:\n{str(e)}")
-
-    def _display_tasks(self):
-        """显示任务列表"""
+    def refresh_task_table(self):
+        """刷新任务表格"""
         self.task_table.setRowCount(0)
-
         for task in self.current_tasks:
             row = self.task_table.rowCount()
             self.task_table.insertRow(row)
 
-            # 关键词
-            item_keyword = QTableWidgetItem(task["keyword"])
-            if task.get("is_duplicate"):
-                item_keyword.setBackground(QColor(255, 200, 200))  # 红色背景标记重复
-            self.task_table.setItem(row, 0, item_keyword)
+            self.task_table.setItem(row, 0, QTableWidgetItem(task["keyword"]))
+            self.task_table.setItem(row, 1, QTableWidgetItem(task.get("order", "totalrank")))
+            self.task_table.setItem(row, 2, QTableWidgetItem(str(task.get("limit", 5))))
+            self.task_table.setItem(row, 3, QTableWidgetItem(task.get("channel", "B站")))
+            self.task_table.setItem(row, 4, QTableWidgetItem(task.get("status", "pending")))
 
-            # 排序方式
-            order_map = {
-                "totalrank": "综合排序",
-                "click": "播放量",
-                "pubdate": "最新发布",
-                "dm": "弹幕数",
-                "stow": "收藏数"
-            }
-            self.task_table.setItem(row, 1, QTableWidgetItem(order_map.get(task["order"], task["order"])))
+            # 删除按钮
+            del_btn = QPushButton("删除")
+            del_btn.setObjectName("dangerBtn")
+            del_btn.clicked.connect(lambda _, r=row: self.delete_task(r))
+            self.task_table.setCellWidget(row, 5, del_btn)
 
-            # 数量
-            self.task_table.setItem(row, 2, QTableWidgetItem(str(task["limit"])))
+    def delete_task(self, row: int):
+        """删除任务"""
+        if 0 <= row < len(self.current_tasks):
+            self.current_tasks.pop(row)
+            self.refresh_task_table()
 
-            # 状态
-            status = "⚠️ 已处理" if task.get("is_duplicate") else "⏳ 待处理"
-            item_status = QTableWidgetItem(status)
-            if task.get("is_duplicate"):
-                item_status.setBackground(QColor(255, 200, 200))
-            self.task_table.setItem(row, 3, item_status)
+    def clear_pending_tasks(self):
+        """清空未执行任务"""
+        self.current_tasks = [t for t in self.current_tasks if t.get("status") == "completed"]
+        self.refresh_task_table()
+        self.status_bar.showMessage("已清空未执行任务")
 
-        # 调整列宽
-        self.task_table.resizeColumnsToContents()
-
-    def _preview_tasks(self):
-        """预览任务（显示在表格中）"""
+    def start_crawling(self):
+        """开始下载任务"""
         if not self.current_tasks:
-            QMessageBox.information(self, "提示", "请先上传 Excel 文件")
-            return
-        self._display_tasks()
-
-    def _clear_tasks(self):
-        """清空任务"""
-        self.current_tasks = []
-        self.task_table.setRowCount(0)
-        self.btn_start_download.setEnabled(False)
-        self.statusBar().showMessage("任务已清空")
-
-    def _start_download(self):
-        """开始下载"""
-        if not self.checkbox_bilibili.isChecked():
-            QMessageBox.warning(self, "提示", "请至少选择一个下载渠道")
+            QMessageBox.warning(self, "提示", "没有待执行的任务")
             return
 
-        if not self.current_tasks:
-            QMessageBox.warning(self, "提示", "没有待处理的任务")
+        # 只下载未完成的任务
+        pending_tasks = [t for t in self.current_tasks if t.get("status") != "completed"]
+        if not pending_tasks:
+            QMessageBox.warning(self, "提示", "所有任务已完成")
             return
 
-        self.btn_start_download.setEnabled(False)
-        self.btn_stop_download.setEnabled(True)
+        self.start_crawl_btn.setEnabled(False)
+        self.progress_bar.setMaximum(len(pending_tasks))
         self.progress_bar.setValue(0)
-        self.progress_bar.setMaximum(len(self.current_tasks))
 
-        # 过滤掉重复的关键词（仅下载未处理的）
-        valid_tasks = [t for t in self.current_tasks if not t.get("is_duplicate")]
-        if not valid_tasks:
-            QMessageBox.warning(self, "提示", "所有关键词都已处理过，无法下载")
-            self.btn_start_download.setEnabled(True)
-            self.btn_stop_download.setEnabled(False)
-            return
-
-        # 启动下载线程
-        self.download_worker = DownloadWorker(valid_tasks)
-        self.download_worker.progress.connect(self._on_download_progress)
-        self.download_worker.finished.connect(self._on_download_finished)
-        self.download_worker.video_added.connect(self._on_video_added)
+        self.download_worker = DownloadWorker(pending_tasks)
+        self.download_worker.progress.connect(self.on_download_progress)
+        self.download_worker.progress_value.connect(self.on_download_progress_value)
+        self.download_worker.finished.connect(self.on_download_finished)
+        self.download_worker.video_added.connect(self.on_video_added)
         self.download_worker.start()
 
-        self.statusBar().showMessage("下载中...")
+        self.status_bar.showMessage("下载中...")
 
-    def _stop_download(self):
-        """停止下载"""
-        if self.download_worker:
-            self.download_worker.stop()
-            self.download_worker.wait()
-            self.download_worker = None
+    def on_download_progress(self, message: str):
+        self.status_bar.showMessage(message)
 
-        self.btn_start_download.setEnabled(True)
-        self.btn_stop_download.setEnabled(False)
-        self.statusBar().showMessage("下载已停止")
+    def on_download_progress_value(self, current: int, total: int):
+        self.progress_bar.setValue(current)
 
-    def _on_download_progress(self, message: str):
-        """下载进度更新"""
-        self.log_text.setText(message)
-
-    def _on_download_finished(self, success: bool, message: str):
-        """下载完成"""
-        self.btn_start_download.setEnabled(True)
-        self.btn_stop_download.setEnabled(False)
-
-        # 更新历史记录
+    def on_download_finished(self, success: bool, message: str):
+        self.start_crawl_btn.setEnabled(True)
         for task in self.current_tasks:
-            if not task.get("is_duplicate"):
+            if task.get("status") != "completed":
+                task["status"] = "completed"
                 self.keyword_history.add(task["keyword"])
-
-        # 刷新历史列表
-        self.history_list.clear()
-        self.history_list.addItems(list(self.keyword_history.get_all().keys()))
-
-        self._refresh_videos()
-        self.statusBar().showMessage(message)
+        self.refresh_task_table()
+        self.refresh_videos()
+        self.status_bar.showMessage(message)
         QMessageBox.information(self, "完成", message)
 
-    def _on_video_added(self, video: dict):
-        """新视频添加"""
+    def on_video_added(self, video: dict):
         self.video_list.append(video)
-        self._display_videos()
 
-    def _refresh_videos(self):
+    # --- 视频库 ---
+
+    def refresh_videos(self):
         """刷新视频列表"""
-        self.video_list = self._scan_video_directory()
-        self._display_videos()
+        self.video_list = []
+        if VIDEOS_DIR.exists():
+            for keyword_dir in VIDEOS_DIR.iterdir():
+                if not keyword_dir.is_dir():
+                    continue
+                for video_file in keyword_dir.glob("*.mp4"):
+                    size_mb = video_file.stat().st_size / (1024 * 1024)
+                    self.video_list.append({
+                        "path": str(video_file),
+                        "name": video_file.stem,
+                        "keyword": keyword_dir.name,
+                        "size": size_mb,
+                        "duration": "N/A",
+                        "favorite": "N/A",
+                        "play": "N/A",
+                        "status": "已下载"
+                    })
 
-    def _scan_video_directory(self) -> list[dict]:
-        """扫描视频目录"""
-        videos = []
-
-        if not VIDEOS_DIR.exists():
-            return videos
-
-        for keyword_dir in VIDEOS_DIR.iterdir():
-            if not keyword_dir.is_dir():
-                continue
-
-            for video_file in keyword_dir.glob("*.mp4"):
-                videos.append({
-                    "path": str(video_file),
-                    "name": video_file.stem,
-                    "keyword": keyword_dir.name,
-                    "duration": "N/A",
-                    "size": video_file.stat().st_size / (1024 * 1024),  # MB
-                    "favorite": "N/A",
-                    "selected": False
-                })
-
-        return videos
-
-    def _display_videos(self):
-        """显示视频列表"""
-        self.video_table.setRowCount(0)
-
+        self.history_table.setRowCount(0)
         for video in self.video_list:
-            row = self.video_table.rowCount()
-            self.video_table.insertRow(row)
+            row = self.history_table.rowCount()
+            self.history_table.insertRow(row)
 
-            # 选择框
-            checkbox = QCheckBox()
-            checkbox.setChecked(video.get("selected", False))
-            checkbox.stateChanged.connect(
-                lambda state, v=video: v.update({"selected": state == Qt.CheckState.Checked})
-            )
-            self.video_table.setCellWidget(row, 0, checkbox)
+            chk = QCheckBox()
+            self.history_table.setCellWidget(row, 0, chk)
+            self.history_table.setItem(row, 1, QTableWidgetItem(video["name"]))
+            self.history_table.setItem(row, 2, QTableWidgetItem(video["keyword"]))
+            self.history_table.setItem(row, 3, QTableWidgetItem(f"{video['size']:.1f}"))
+            self.history_table.setItem(row, 4, QTableWidgetItem(video["duration"]))
+            self.history_table.setItem(row, 5, QTableWidgetItem(str(video.get("favorite", "N/A"))))
+            self.history_table.setItem(row, 6, QTableWidgetItem(str(video.get("play", "N/A"))))
+            self.history_table.setItem(row, 7, QTableWidgetItem(video["status"]))
 
-            # 其他信息
-            self.video_table.setItem(row, 1, QTableWidgetItem(video["name"]))
-            self.video_table.setItem(row, 2, QTableWidgetItem(video["keyword"]))
-            self.video_table.setItem(row, 3, QTableWidgetItem(str(video["duration"])))
-            self.video_table.setItem(row, 4, QTableWidgetItem(f"{video['size']:.1f} MB"))
-            self.video_table.setItem(row, 5, QTableWidgetItem(str(video["favorite"])))
-            self.video_table.setItem(row, 6, QTableWidgetItem("✅ 已下载"))
+    def add_selected_videos_to_asr(self):
+        """将选中视频加入 ASR 队列"""
+        selected = []
+        for row in range(self.history_table.rowCount()):
+            chk_widget = self.history_table.cellWidget(row, 0)
+            if chk_widget and chk_widget.isChecked():
+                video = self.video_list[row]
+                if video not in self.asr_queue:
+                    self.asr_queue.append(video)
+                selected.append(video["name"])
 
-        # 调整列宽
-        self.video_table.resizeColumnsToContents()
+        if selected:
+            self.refresh_asr_table()
+            QMessageBox.information(self, "提示", f"已添加 {len(selected)} 个视频到 ASR 队列")
+        else:
+            QMessageBox.warning(self, "提示", "请先选择要处理的视频")
 
-    def _add_to_asr_queue(self):
-        """添加到 ASR 队列"""
-        selected = [v for v in self.video_list if v.get("selected")]
+    # --- ASR 转文字 ---
 
-        if not selected:
-            QMessageBox.warning(self, "提示", "请先选择要转换的视频")
-            return
+    def refresh_asr_table(self):
+        """刷新 ASR 表格"""
+        self.asr_table.setRowCount(0)
+        for video in self.asr_queue:
+            row = self.asr_table.rowCount()
+            self.asr_table.insertRow(row)
+            self.asr_table.setItem(row, 0, QTableWidgetItem(video["name"]))
+            self.asr_table.setItem(row, 1, QTableWidgetItem(video["keyword"]))
+            self.asr_table.setItem(row, 2, QTableWidgetItem("待处理"))
 
-        for video in selected:
-            if video not in self.asr_queue:
-                self.asr_queue.append(video)
-                self.asr_queue_list.addItem(video["name"])
+            del_btn = QPushButton("移除")
+            del_btn.setObjectName("dangerBtn")
+            del_btn.clicked.connect(lambda _, r=row: self.remove_from_asr(r))
+            self.asr_table.setCellWidget(row, 3, del_btn)
 
-        self.statusBar().showMessage(f"已添加 {len(selected)} 个视频到 ASR 队列")
+    def remove_from_asr(self, row: int):
+        if 0 <= row < len(self.asr_queue):
+            self.asr_queue.pop(row)
+            self.refresh_asr_table()
 
-    def _start_asr(self):
-        """开始 ASR 处理"""
+    def start_transcription(self):
+        """开始 ASR 转文字"""
         if not self.asr_queue:
             QMessageBox.warning(self, "提示", "ASR 队列为空")
             return
 
-        self.statusBar().showMessage("正在处理 ASR...")
-        self.log_text.setText("开始语音转文字处理...")
+        self.start_transcribe_btn.setEnabled(False)
+        self.status_bar.showMessage("正在处理 ASR...")
 
-        # 在主线程执行（避免复杂的多线程同步）
-        try:
-            from parser.main import main as asr_main
+        video = self.asr_queue[0]
+        self.asr_worker = ASRWorker(video["path"])
+        self.asr_worker.progress.connect(self.status_bar.showMessage)
+        self.asr_worker.finished.connect(self.on_asr_finished)
+        self.asr_worker.start()
 
-            for video in self.asr_queue[:]:  # 使用切片避免修改迭代中的列表
-                self.log_text.setText(f"处理: {video['name']}")
-                QApplication.processEvents()  # 保持 UI 响应
+    def on_asr_finished(self, success: bool, message: str):
+        self.start_transcribe_btn.setEnabled(True)
+        if success:
+            self.asr_queue.pop(0)
+            self.refresh_asr_table()
+            self.refresh_transcription_files()
+        self.status_bar.showMessage(message)
+        QMessageBox.information(self, "结果", message)
 
-                try:
-                    # 调用现有的 ASR 处理
-                    # 注意：这会阻塞，需要较长时间
-                    import subprocess
-                    result = subprocess.run(
-                        [sys.executable, "-m", "parser.main", video["path"]],
-                        capture_output=True, text=True, cwd=str(BASE_DIR)
-                    )
+    def refresh_transcription_files(self):
+        """刷新转文字文件列表"""
+        files = []
+        if DOCS_DIR.exists():
+            for f in DOCS_DIR.glob("*.md"):
+                files.append({
+                    "name": f.name,
+                    "path": str(f),
+                    "time": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                })
 
-                    if result.returncode == 0:
-                        self.asr_queue.remove(video)
-                        self.asr_queue_list.takeItem(self.asr_queue_list.row(
-                            self.asr_queue_list.findItems(video["name"], Qt.MatchExactly)[0]
-                        ))
-                        self.log_text.setText(f"✅ 完成: {video['name']}")
-                    else:
-                        self.log_text.setText(f"❌ 失败: {video['name']}")
+        self.transcription_table.setRowCount(0)
+        for f in files:
+            row = self.transcription_table.rowCount()
+            self.transcription_table.insertRow(row)
+            self.transcription_table.setItem(row, 0, QTableWidgetItem(f["name"]))
+            self.transcription_table.setItem(row, 1, QTableWidgetItem(f["name"].replace(".md", "")))
+            self.transcription_table.setItem(row, 2, QTableWidgetItem(f["time"]))
 
-                except Exception as e:
-                    self.log_text.setText(f"❌ 错误: {str(e)}")
+            to_summary_btn = QPushButton("→ 提炼")
+            to_summary_btn.clicked.connect(lambda _, p=f["path"]: self.add_to_summary_queue(p))
+            self.transcription_table.setCellWidget(row, 3, to_summary_btn)
 
-            self.statusBar().showMessage("ASR 处理完成")
-            QMessageBox.information(self, "完成", "所有视频已处理完成")
+    # --- 提炼总结 ---
 
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"ASR 处理失败:\n{str(e)}")
+    def generate_summary_from_trans(self):
+        """从转文字文件生成总结"""
+        # 获取选中的文件
+        selected_files = []
+        for row in range(self.transcription_table.rowCount()):
+            item = self.transcription_table.item(row, 0)
+            if item:
+                file_path = DOCS_DIR / item.text()
+                if file_path.exists():
+                    selected_files.append(str(file_path))
 
-    def _load_video_history(self):
-        """加载视频历史"""
-        self._refresh_videos()
+        if not selected_files:
+            QMessageBox.warning(self, "提示", "没有可提炼的文件")
+            return
+
+        self.generate_summary_btn.setEnabled(False)
+        self.status_bar.showMessage("正在提炼总结...")
+
+        # 逐个处理
+        self._process_summary_batch(selected_files, 0)
+
+    def _process_summary_batch(self, files: list, index: int):
+        """批量处理总结"""
+        if index >= len(files):
+            self.generate_summary_btn.setEnabled(True)
+            self.refresh_summary_files()
+            self.status_bar.showMessage("提炼完成")
+            QMessageBox.information(self, "完成", f"已处理 {len(files)} 个文件")
+            return
+
+        file_path = files[index]
+        self.status_bar.showMessage(f"正在提炼 ({index+1}/{len(files)}): {Path(file_path).name}")
+
+        self.summary_worker = SummaryWorker(file_path)
+        self.summary_worker.progress.connect(self.status_bar.showMessage)
+        self.summary_worker.finished.connect(
+            lambda success, msg: self._process_summary_batch(files, index + 1)
+        )
+        self.summary_worker.start()
+
+    def add_to_summary_queue(self, file_path: str):
+        """添加文件到总结队列并处理"""
+        self.status_bar.showMessage(f"正在提炼: {Path(file_path).name}")
+        self.summary_worker = SummaryWorker(file_path)
+        self.summary_worker.finished.connect(
+            lambda success, msg: (self.refresh_summary_files(), self.status_bar.showMessage(msg))
+        )
+        self.summary_worker.start()
+
+    def refresh_summary_files(self):
+        """刷新总结文件列表"""
+        files = []
+        if SUMMARY_DIR.exists():
+            for f in SUMMARY_DIR.glob("*.md"):
+                files.append({
+                    "name": f.name,
+                    "path": str(f),
+                    "time": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                })
+
+        self.summary_table.setRowCount(0)
+        for f in files:
+            row = self.summary_table.rowCount()
+            self.summary_table.insertRow(row)
+            self.summary_table.setItem(row, 0, QTableWidgetItem(f["name"]))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(f["name"]))
+            self.summary_table.setItem(row, 2, QTableWidgetItem(f["time"]))
+            self.summary_table.setItem(row, 3, QTableWidgetItem("✅ 完成"))
+
+    # ==================== 关闭事件 ====================
 
     def closeEvent(self, event):
-        """关闭事件"""
         if self.download_worker and self.download_worker.isRunning():
             self.download_worker.stop()
             self.download_worker.wait()
+        if self.asr_worker and self.asr_worker.isRunning():
+            self.asr_worker.terminate()
+        if self.summary_worker and self.summary_worker.isRunning():
+            self.summary_worker.terminate()
         event.accept()
 
 
