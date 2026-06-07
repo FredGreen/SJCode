@@ -267,6 +267,22 @@ def get_pending_transcriptions() -> List[Dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
+def is_video_in_transcriptions(video_id: int) -> bool:
+    """检查视频是否已在转文字队列中（避免重复添加）"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM transcriptions WHERE video_id = ? LIMIT 1", (video_id,))
+        return cursor.fetchone() is not None
+
+
+def is_video_path_in_transcriptions(video_path: str) -> bool:
+    """检查视频路径是否已在转文字队列中（用于无 video_id 的情况）"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM transcriptions WHERE video_path = ? LIMIT 1", (video_path,))
+        return cursor.fetchone() is not None
+
+
 def get_all_transcriptions() -> List[Dict]:
     """获取所有转文字记录"""
     with get_connection() as conn:

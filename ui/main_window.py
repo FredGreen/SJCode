@@ -734,7 +734,7 @@ class VideoProcessorApp(QMainWindow):
     # ========== ASR 转文字 ==========
 
     def add_selected_videos_to_asr(self):
-        """将选中的视频添加到ASR队列"""
+        """将选中的视频添加到ASR队列（去重）"""
         selected_rows = self.history_table.selectionModel().selectedRows()
         if not selected_rows:
             QMessageBox.information(self, "提示", "请先选择要转换的视频")
@@ -742,26 +742,61 @@ class VideoProcessorApp(QMainWindow):
 
         videos = database.get_all_videos()
         added = 0
+        skipped = 0
         for row in selected_rows:
-            video_id = row.row()
-            if video_id < len(videos):
-                video = videos[video_id]
-                if video.get("file_path"):
-                    database.add_transcription(video["id"], video["file_path"])
-                    added += 1
+            row_idx = row.row()
+            if row_idx < len(videos):
+                video = videos[row_idx]
+                video_id = video.get("id")
+                video_path = video.get("file_path")
+                
+                if not video_path:
+                    continue
+                
+                # 检查是否已存在
+                if (video_id and database.is_video_in_transcriptions(video_id)) or \
+                   database.is_video_path_in_transcriptions(video_path):
+                    skipped += 1
+                    continue
+                
+                database.add_transcription(video_id, video_path)
+                added += 1
 
+        msg_parts = []
         if added > 0:
-            QMessageBox.information(self, "成功", f"已添加 {added} 个视频到转文字队列")
+            msg_parts.append(f"已添加 {added} 个视频到转文字队列")
+        if skipped > 0:
+            msg_parts.append(f"跳过 {skipped} 个重复项")
+        
+        if added > 0:
+            QMessageBox.information(self, "成功", "\n".join(msg_parts))
             self.refresh_asr_table()
+        elif skipped > 0:
+            QMessageBox.information(self, "提示", f"选中的视频都已在队列中（{skipped} 个）")
         else:
             QMessageBox.warning(self, "警告", "选中的视频没有有效的文件路径")
 
     def add_single_video_to_asr(self, video):
-        """添加单个视频到ASR"""
-        if video.get("file_path"):
-            database.add_transcription(video["id"], video["file_path"])
-            self.refresh_asr_table()
-            self.statusBar.showMessage(f"已添加: {video['title'][:30]}")
+        """添加单个视频到ASR（去重）"""
+        if not video.get("file_path"):
+            QMessageBox.warning(self, "警告", "视频文件路径无效")
+            return
+        
+        # 检查是否已存在
+        video_id = video.get("id")
+        video_path = video["file_path"]
+        
+        if video_id and database.is_video_in_transcriptions(video_id):
+            QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已经在转文字队列中了")
+            return
+        
+        if database.is_video_path_in_transcriptions(video_path):
+            QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已经在转文字队列中了")
+            return
+        
+        database.add_transcription(video.get("id"), video_path)
+        self.refresh_asr_table()
+        self.statusBar.showMessage(f"已添加: {video['title'][:30]}")
 
     def start_transcription(self):
         tasks = database.get_pending_transcriptions()
