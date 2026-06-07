@@ -166,19 +166,33 @@ class ASRWorker(QThread):
 
     def run(self):
         try:
+            print(f"[DEBUG ASRWorker] 开始处理: {self.video_path}")
             self.progress.emit(f"正在处理: {Path(self.video_path).name}")
+            
+            cmd = [sys.executable, "-m", "parser.main", self.video_path]
+            print(f"[DEBUG ASRWorker] 执行命令: {' '.join(cmd)}")
+            print(f"[DEBUG ASRWorker] 工作目录: {BASE_DIR}")
+            
             result = subprocess.run(
-                [sys.executable, "-m", "parser.main", self.video_path],
+                cmd,
                 capture_output=True, text=True,
                 encoding='utf-8', errors='ignore',
                 cwd=str(BASE_DIR),
                 timeout=600
             )
+            print(f"[DEBUG ASRWorker] 返回码: {result.returncode}")
+            print(f"[DEBUG ASRWorker] stdout: {result.stdout[:500]}")
+            print(f"[DEBUG ASRWorker] stderr: {result.stderr[:500]}")
+            
             if result.returncode == 0:
                 self.finished.emit(True, "ASR 处理完成")
             else:
-                self.finished.emit(False, f"处理失败: {result.stderr[:100]}")
+                error_msg = result.stderr[:200] if result.stderr else "未知错误"
+                print(f"[DEBUG ASRWorker] 处理失败: {error_msg}")
+                self.finished.emit(False, f"处理失败: {error_msg}")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.finished.emit(False, f"错误: {str(e)}")
 
 
