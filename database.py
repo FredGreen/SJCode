@@ -71,6 +71,7 @@ def init_database():
                 plays INTEGER,
                 keyword TEXT,
                 status TEXT DEFAULT 'downloaded',
+                asr_status TEXT DEFAULT 'pending',  -- pending/queued/completed
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY (task_id) REFERENCES tasks(id)
             )
@@ -119,6 +120,23 @@ def init_database():
         """)
 
         print(f"[数据库] 初始化完成: {DB_PATH}")
+
+        # 数据库迁移：确保 asr_status 字段存在
+        migrate_add_asr_status()
+
+
+def migrate_add_asr_status():
+    """迁移：为 videos 表添加 asr_status 字段（如果不存在）"""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(videos)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'asr_status' not in columns:
+                cursor.execute("ALTER TABLE videos ADD COLUMN asr_status TEXT DEFAULT 'pending'")
+                print("[数据库迁移] 已添加 asr_status 字段到 videos 表")
+    except Exception as e:
+        print(f"[数据库迁移] 检查 asr_status 字段失败: {e}")
 
 
 # ==================== 任务操作 ====================
@@ -233,14 +251,23 @@ def get_videos_by_task(task_id: int) -> List[Dict]:
 # ==================== 转文字操作 ====================
 
 def add_transcription(video_id: int, video_path: str) -> int:
-    """添加转文字任务"""
+    """添加转文字任务，同时更新视频的 asr_status 为 queued"""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO transcriptions (video_id, video_path, status)
             VALUES (?, ?, 'pending')
         """, (video_id, video_path))
-        return cursor.lastrowid
+        trans_id = cursor.lastrowid
+        
+        # 更新视频的 ASR 状态为已加入队列
+        if video_id:
+            cursor.execute("UPDATE videos SET asr_status = 'queued' WHERE id = ? AND (asr_status IS NULL OR asr_status = 'pending')", (video_id,))
+        else:
+            # 没有 video_id 时，按路径查找并更新
+            cursor.execute("UPDATE videos SET asr_status = 'queued' WHERE file_path = ? AND (asr_status IS NULL OR asr_status = 'pending')", (video_path,))
+        
+        return trans_id
 
 
 def add_transcription_direct(video_path: str) -> int:
@@ -297,7 +324,7 @@ def get_all_transcriptions() -> List[Dict]:
 
 def update_transcription(transcription_id: int, status: str,
                          output_path: str = None, error_message: str = None):
-    """更新转文字状态"""
+    """更新转文字状态，同时更新关联视频的 asr_status"""
     with get_connection() as conn:
         cursor = conn.cursor()
         if status == 'running':
@@ -307,6 +334,11 @@ def update_transcription(transcription_id: int, status: str,
                 WHERE id = ?
             """, (status, transcription_id))
         elif status in ('completed', 'failed'):
+            # 获取关联的 video_id
+            cursor.execute("SELECT video_id FROM transcriptions WHERE id = ?", (transcription_id,))
+            row = cursor.fetchone()
+            video_id = row["video_id"] if row else None
+            
             if output_path:
                 cursor.execute("""
                     UPDATE transcriptions
@@ -321,6 +353,13 @@ def update_transcription(transcription_id: int, status: str,
                         completed_at = datetime('now', 'localtime')
                     WHERE id = ?
                 """, (status, error_message, transcription_id))
+            
+            # 更新视频的 asr_status
+            if video_id and status == 'completed':
+                cursor.execute("UPDATE videos SET asr_status = 'completed' WHERE id = ?", (video_id,))
+            elif video_id and status == 'failed':
+                # 失败时将状态回退为 pending，允许重新加入
+                cursor.execute("UPDATE videos SET asr_status = 'pending' WHERE id = ?", (video_id,))
 
 
 # ==================== 提炼总结操作 ====================

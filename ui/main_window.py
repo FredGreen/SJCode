@@ -411,9 +411,9 @@ class VideoProcessorApp(QMainWindow):
         video_group = QGroupBox("🎬 历史下载视频库")
         video_layout = QVBoxLayout(video_group)
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(6)
+        self.history_table.setColumnCount(7)
         self.history_table.setHorizontalHeaderLabels(
-            ["视频名称", "关键词", "大小(MB)", "时长", "收藏数", "操作"]
+            ["视频名称", "关键词", "大小(MB)", "时长", "收藏数", "ASR状态", "操作"]
         )
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.history_table.setAlternatingRowColors(True)
@@ -681,10 +681,25 @@ class VideoProcessorApp(QMainWindow):
             self.history_table.setItem(idx, 3, QTableWidgetItem(video.get("duration", "")))
             self.history_table.setItem(idx, 4, QTableWidgetItem(str(video.get("favorites", 0))))
 
-            # 添加到ASR按钮
+            # ASR 状态列
+            asr_status = video.get("asr_status", "pending")
+            status_text = {"pending": "未加入", "queued": "排队中", "completed": "已完成"}.get(asr_status, asr_status)
+            status_item = QTableWidgetItem(status_text)
+            if asr_status == "completed":
+                status_item.setForeground(QColor("green"))
+            elif asr_status == "queued":
+                status_item.setForeground(QColor("orange"))
+            else:
+                status_item.setForeground(QColor("gray"))
+            self.history_table.setItem(idx, 5, status_item)
+
+            # 添加到ASR按钮（根据状态禁用）
             btn = QPushButton("→ ASR")
             btn.clicked.connect(lambda _, v=video: self.add_single_video_to_asr(v))
-            self.history_table.setCellWidget(idx, 5, btn)
+            if asr_status in ("queued", "completed"):
+                btn.setEnabled(False)
+                btn.setText("已加入")
+            self.history_table.setCellWidget(idx, 6, btn)
 
     def refresh_asr_table(self):
         transcriptions = database.get_all_transcriptions()
@@ -789,11 +804,17 @@ class VideoProcessorApp(QMainWindow):
                 video = videos[row_idx]
                 video_id = video.get("id")
                 video_path = video.get("file_path")
+                asr_status = video.get("asr_status", "pending")
                 
                 if not video_path:
                     continue
                 
-                # 检查是否已存在
+                # 检查 ASR 状态，已排队或已完成则跳过
+                if asr_status in ("queued", "completed"):
+                    skipped += 1
+                    continue
+                
+                # 检查是否已存在（双重保险）
                 if (video_id and database.is_video_in_transcriptions(video_id)) or \
                    database.is_video_path_in_transcriptions(video_path):
                     skipped += 1
@@ -806,26 +827,37 @@ class VideoProcessorApp(QMainWindow):
         if added > 0:
             msg_parts.append(f"已添加 {added} 个视频到转文字队列")
         if skipped > 0:
-            msg_parts.append(f"跳过 {skipped} 个重复项")
+            msg_parts.append(f"跳过 {skipped} 个（已加入或已完成）")
         
         if added > 0:
             QMessageBox.information(self, "成功", "\n".join(msg_parts))
+            self.refresh_video_table()  # 刷新视频库状态
             self.refresh_asr_table()
         elif skipped > 0:
-            QMessageBox.information(self, "提示", f"选中的视频都已在队列中（{skipped} 个）")
+            QMessageBox.information(self, "提示", f"选中的视频都已加入或已完成（{skipped} 个）")
         else:
             QMessageBox.warning(self, "警告", "选中的视频没有有效的文件路径")
 
     def add_single_video_to_asr(self, video):
-        """添加单个视频到ASR（去重）"""
+        """添加单个视频到ASR（根据状态检查）"""
         if not video.get("file_path"):
             QMessageBox.warning(self, "警告", "视频文件路径无效")
             return
         
-        # 检查是否已存在
         video_id = video.get("id")
         video_path = video["file_path"]
+        asr_status = video.get("asr_status", "pending")
         
+        # 根据 ASR 状态检查
+        if asr_status == "completed":
+            QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已完成转文字，无需重复添加")
+            return
+        
+        if asr_status == "queued":
+            QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已在转文字队列中")
+            return
+        
+        # 双重保险检查
         if video_id and database.is_video_in_transcriptions(video_id):
             QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已经在转文字队列中了")
             return
@@ -834,7 +866,8 @@ class VideoProcessorApp(QMainWindow):
             QMessageBox.information(self, "提示", f"「{video['title'][:20]}...」已经在转文字队列中了")
             return
         
-        database.add_transcription(video.get("id"), video_path)
+        database.add_transcription(video_id, video_path)
+        self.refresh_video_table()  # 刷新视频库状态
         self.refresh_asr_table()
         self.statusBar.showMessage(f"已添加: {video['title'][:30]}")
 
