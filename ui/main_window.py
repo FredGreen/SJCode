@@ -653,7 +653,8 @@ class VideoProcessorApp(QMainWindow):
             video_name = Path(t["video_path"]).stem if t["video_path"] else "未知"
             self.asr_table.setItem(idx, 0, QTableWidgetItem(video_name[:40]))
             self.asr_table.setItem(idx, 1, QTableWidgetItem(t["status"]))
-            self.asr_table.setItem(idx, 2, QTableWidgetItem(t.get("output_path", "")[:40]))
+            output_path = t.get("output_path") or ""
+            self.asr_table.setItem(idx, 2, QTableWidgetItem(output_path[:40] if output_path else "无文件"))
 
             # 根据状态设置颜色
             status = t["status"]
@@ -662,7 +663,7 @@ class VideoProcessorApp(QMainWindow):
 
             # 提炼按钮
             btn = QPushButton("→ 提炼")
-            btn.clicked.connect(lambda _, tid=t["id"], op=t.get("output_path", ""): self.add_to_summary(tid, op))
+            btn.clicked.connect(lambda _, tid=t["id"], op=t.get("output_path") or "": self.add_to_summary(tid, op))
             self.asr_table.setCellWidget(idx, 3, btn)
 
         # 刷新转文字文件列表
