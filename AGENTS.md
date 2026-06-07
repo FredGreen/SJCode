@@ -36,6 +36,19 @@ SJCode/
 │   └── PYINSTALLER_GUIDE.md # PyInstaller 打包指南
 ├── output/                 # 输出目录
 │   ├── docs/               # Parser 生成的 Markdown 文档
+│   ├── asr_cache/         # ASR 缓存
+│   ├── video/             # 下载的视频
+│   ├── tasks/             # 上传的 Excel 任务
+│   ├── summary/           # 商机提炼总结
+│   └── history/           # 关键词历史记录
+├── database.py             # SQLite 数据库模块
+├── sjcode.db               # SQLite 数据库文件（自动创建）
+├── .coze                   # 项目配置
+├── requirements-all.txt     # 全量依赖
+├── requirements_ui.txt      # UI 依赖
+├── SJCode.spec             # PyInstaller 配置
+└── AGENTS.md               # 本文件
+│   ├── docs/               # Parser 生成的 Markdown 文档
 │   ├── asr_cache/          # ASR 缓存
 │   ├── video/              # 下载的视频
 │   ├── tasks/              # 上传的 Excel 任务
@@ -108,6 +121,31 @@ python -m parser.summary <目录> --pattern "*.md"
 python -m parser.summary <文件> -o output/summary
 ```
 输出目录：`output/summary/`
+
+## 数据库
+
+使用 SQLite 存储所有任务和历史数据，无需安装，直接打包进 exe。
+
+### 数据库文件
+```
+sjcode.db  # 存储在项目根目录
+```
+
+### 数据表
+
+| 表名 | 说明 |
+|------|------|
+| tasks | 下载任务记录 |
+| videos | 视频信息 |
+| transcriptions | 转文字记录 |
+| summaries | 提炼总结记录 |
+| keyword_history | 关键词历史（避免重复） |
+
+### 备份
+```bash
+# 数据库是单文件，直接复制 sjcode.db 即可备份
+cp sjcode.db sjcode.db.backup
+```
 
 ## UI 功能说明
 

@@ -18,6 +18,9 @@ env/
 .coverage
 
 # --- 3. 你的项目专属忽略（核心）---
+# 数据库文件（每个用户数据不同）
+sjcode.db
+*.db
 output/
 bin/
 *.log
