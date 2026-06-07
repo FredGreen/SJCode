@@ -572,25 +572,6 @@ class VideoProcessorApp(QMainWindow):
             QMessageBox.information(self, "提示", "请先勾选要加入的任务")
             return
 
-        # 检查是否有重复关键词
-        duplicate_keywords = []
-        for row in selected_rows:
-            keyword = self.preview_table.item(row, 1).text()
-            if database.check_keyword_exists(keyword):
-                duplicate_keywords.append(keyword)
-
-        # 如果有重复关键词，弹出确认对话框
-        if duplicate_keywords:
-            keywords_str = "\n".join([f"  - {kw}" for kw in duplicate_keywords])
-            reply = QMessageBox.question(
-                self, "重复关键词确认",
-                f"以下关键词已在历史记录中：\n{keywords_str}\n\n是否仍要添加这些任务？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-
         added = 0
         skipped = 0
         for row in selected_rows:
@@ -600,6 +581,11 @@ class VideoProcessorApp(QMainWindow):
             channel_combo = self.preview_table.cellWidget(row, 4)
             channel = channel_combo.currentText()
 
+            # 检查是否重复，重复则跳过
+            if database.check_keyword_exists(keyword):
+                skipped += 1
+                continue
+
             # 添加到数据库
             try:
                 database.add_task(keyword, sort_type, int(count_str) if count_str.isdigit() else 5, channel)
@@ -608,31 +594,41 @@ class VideoProcessorApp(QMainWindow):
             except Exception as e:
                 skipped += 1
 
-        self.statusBar.showMessage(f"添加了 {added} 个任务" + (f"，跳过 {skipped} 个" if skipped else ""))
+        if skipped > 0:
+            QMessageBox.information(self, "提示", f"已跳过 {skipped} 个重复关键词")
+        self.statusBar.showMessage(f"添加了 {added} 个任务" + (f"，跳过 {skipped} 个重复" if skipped else ""))
         self.refresh_task_table()
 
     def add_all_to_tasks(self):
-        self.preview_table.setRowCount(0)
+        """全部加入任务 - 跳过重复关键词"""
+        added = 0
+        skipped = 0
+
         for data in self.preview_data:
-            row = self.preview_table.rowCount()
-            self.preview_table.insertRow(row)
+            keyword = data.get("keyword", "")
 
-            chk = QCheckBox()
-            chk.setChecked(True)
-            self.preview_table.setCellWidget(row, 0, chk)
-            self.preview_table.setItem(row, 1, QTableWidgetItem(data["keyword"]))
-            self.preview_table.setItem(row, 2, QTableWidgetItem(data["sort"]))
-            self.preview_table.setItem(row, 3, QTableWidgetItem(data["count"]))
+            # 检查是否重复，重复则跳过
+            if database.check_keyword_exists(keyword):
+                skipped += 1
+                continue
 
-            channel_combo = QComboBox()
-            channel_combo.addItems(["B站", "抖音", "youtube"])
-            self.preview_table.setCellWidget(row, 4, channel_combo)
+            # 添加到数据库
+            try:
+                database.add_task(
+                    keyword,
+                    data.get("sort", "totalrank"),
+                    int(data.get("count", 5)) if data.get("count", "5").isdigit() else 5,
+                    data.get("channel", "B站")
+                )
+                database.add_keyword_history(keyword)
+                added += 1
+            except Exception as e:
+                skipped += 1
 
-            if data.get("duplicate"):
-                for col in range(1, 4):
-                    item = self.preview_table.item(row, col)
-                    if item:
-                        item.setForeground(QColor("red"))
+        if skipped > 0:
+            QMessageBox.information(self, "提示", f"已跳过 {skipped} 个重复关键词")
+        self.statusBar.showMessage(f"添加了 {added} 个任务" + (f"，跳过 {skipped} 个重复" if skipped else ""))
+        self.refresh_task_table()
 
     def clear_completed_tasks(self):
         database.clear_completed_tasks()
@@ -645,6 +641,7 @@ class VideoProcessorApp(QMainWindow):
         tasks = database.get_all_tasks()
         self.task_table.setRowCount(len(tasks))
         for idx, task in enumerate(tasks):
+            task_id = task["id"]
             self.task_table.setItem(idx, 0, QTableWidgetItem(task["keyword"]))
             self.task_table.setItem(idx, 1, QTableWidgetItem(task["order_type"]))
             self.task_table.setItem(idx, 2, QTableWidgetItem(str(task["limit_count"])))
@@ -655,6 +652,24 @@ class VideoProcessorApp(QMainWindow):
             status = task["status"]
             color = QColor("green") if status == "completed" else QColor("orange") if status == "pending" else QColor("gray")
             self.task_table.item(idx, 4).setForeground(color)
+
+            # 操作列：移除按钮
+            btn = QPushButton("移除")
+            btn.setStyleSheet("background-color: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px;")
+            btn.clicked.connect(lambda _, tid=task_id: self.remove_task(tid))
+            self.task_table.setCellWidget(idx, 5, btn)
+
+    def remove_task(self, task_id):
+        """移除单个任务"""
+        database.delete_task(task_id)
+        self.refresh_task_table()
+        self.statusBar.showMessage(f"已移除任务 #{task_id}")
+
+    def clear_all_pending_tasks(self):
+        """清空所有待执行任务"""
+        database.clear_all_pending_tasks()
+        self.refresh_task_table()
+        self.statusBar.showMessage("已清空所有待执行任务")
 
     def refresh_video_table(self):
         videos = database.get_all_videos()

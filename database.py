@@ -412,6 +412,13 @@ def check_keyword_exists(keyword: str) -> bool:
         return cursor.fetchone() is not None
 
 
+def clear_all_pending_tasks():
+    """清空所有待执行任务"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tasks WHERE status = 'pending'")
+        conn.commit()
+
 # ==================== 数据管理 ====================
 
 def clear_table(table_name: str) -> int:
