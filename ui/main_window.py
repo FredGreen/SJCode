@@ -33,16 +33,15 @@ from PySide6.QtGui import QColor
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import (
-    OUTPUT_DIR, VIDEOS_DIR, TASKS_DIR, HISTORY_DIR,
-    DOCS_DIR, SUMMARY_DIR, ASR_CACHE_DIR
+    OUTPUT_DIR, VIDEO, TASKS, HISTORY,
+    DOCS, SUMMARY, ASR_CACHE
 )
-from config.settings import VIDEO
 
 
 # ===================== 配置路径 =====================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-HISTORY_FILE = HISTORY_DIR / "keywords_history.json"
+HISTORY_FILE = HISTORY / "keywords_history.json"
 
 
 # ===================== 关键词历史管理 =====================
@@ -640,8 +639,8 @@ class MainWindow(QMainWindow):
     def refresh_videos(self):
         """刷新视频列表"""
         self.video_list = []
-        if VIDEOS_DIR.exists():
-            for keyword_dir in VIDEOS_DIR.iterdir():
+        if VIDEO.exists():
+            for keyword_dir in VIDEO.iterdir():
                 if not keyword_dir.is_dir():
                     continue
                 for video_file in keyword_dir.glob("*.mp4"):
@@ -738,8 +737,8 @@ class MainWindow(QMainWindow):
     def refresh_transcription_files(self):
         """刷新转文字文件列表"""
         files = []
-        if DOCS_DIR.exists():
-            for f in DOCS_DIR.glob("*.md"):
+        if DOCS.exists():
+            for f in DOCS.glob("*.md"):
                 files.append({
                     "name": f.name,
                     "path": str(f),
@@ -767,7 +766,7 @@ class MainWindow(QMainWindow):
         for row in range(self.transcription_table.rowCount()):
             item = self.transcription_table.item(row, 0)
             if item:
-                file_path = DOCS_DIR / item.text()
+                file_path = DOCS / item.text()
                 if file_path.exists():
                     selected_files.append(str(file_path))
 
@@ -812,8 +811,8 @@ class MainWindow(QMainWindow):
     def refresh_summary_files(self):
         """刷新总结文件列表"""
         files = []
-        if SUMMARY_DIR.exists():
-            for f in SUMMARY_DIR.glob("*.md"):
+        if SUMMARY.exists():
+            for f in SUMMARY.glob("*.md"):
                 files.append({
                     "name": f.name,
                     "path": str(f),
