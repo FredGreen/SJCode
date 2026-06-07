@@ -953,6 +953,7 @@ class VideoProcessorApp(QMainWindow):
             database.clear_table(table_name)
             self.statusBar.showMessage(f"{display_name} 已清空")
             self.refresh_all_tables()
+            self._refresh_all_tables_settings()
 
     def clear_all_data(self):
         reply = QMessageBox.question(
@@ -969,12 +970,11 @@ class VideoProcessorApp(QMainWindow):
             self.statusBar.showMessage("所有数据已清空")
             self.refresh_all_tables()
 
-    def refresh_all_tables(self):
-        """刷新所有表格"""
+    def _refresh_all_tables_settings(self):
+        """刷新所有表格（供设置页面使用）"""
         self.refresh_task_table()
         self.refresh_video_table()
         self.refresh_asr_table()
-        self.refresh_transcription_table()
         self.refresh_summary_table()
 
 
