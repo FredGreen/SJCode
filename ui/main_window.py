@@ -576,7 +576,7 @@ class VideoProcessorApp(QMainWindow):
         duplicate_keywords = []
         for row in selected_rows:
             keyword = self.preview_table.item(row, 1).text()
-            if database.is_keyword_in_history(keyword):
+            if database.check_keyword_exists(keyword):
                 duplicate_keywords.append(keyword)
 
         # 如果有重复关键词，弹出确认对话框
