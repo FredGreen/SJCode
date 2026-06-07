@@ -929,6 +929,7 @@ class VideoProcessorApp(QMainWindow):
         stats_group = QGroupBox("数据统计")
         stats_layout = QVBoxLayout(stats_group)
 
+        self.stats_labels = {}  # 保存统计标签引用
         stats = database.get_all_stats()
         for key, value in stats.items():
             row_layout = QHBoxLayout()
@@ -936,6 +937,7 @@ class VideoProcessorApp(QMainWindow):
             row_layout.addStretch()
             count_label = QLabel(str(value))
             count_label.setStyleSheet("font-weight: bold; color: #2c974b;")
+            self.stats_labels[key] = count_label  # 保存引用
             row_layout.addWidget(count_label)
             stats_layout.addLayout(row_layout)
 
@@ -982,12 +984,8 @@ class VideoProcessorApp(QMainWindow):
     def _refresh_settings_stats(self):
         """刷新设置页面的统计数据"""
         stats = database.get_all_stats()
-        self.stats_label.setText(
-            f"视频库: {stats['videos']} 条记录\n"
-            f"转文字队列: {stats['transcriptions']} 条记录\n"
-            f"总结记录: {stats['summaries']} 条记录\n"
-            f"关键词历史: {stats['keyword_history']} 条记录"
-        )
+        for key, label in self.stats_labels.items():
+            label.setText(str(stats.get(key, 0)))
 
     def clear_table(self, table_name, display_name):
         reply = QMessageBox.question(
