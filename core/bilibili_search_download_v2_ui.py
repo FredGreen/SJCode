@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 B站视频下载 - UI 集成版本
-
-复用 core/bilibili_search_download-v2.py 的核心逻辑，
+复用 core/bilibili_search_download_v2.py 的核心逻辑，
 提供与 UI 集成的接口。
 """
-
 import os
 import re
 import subprocess
 import sys
+import time
+import hashlib
+import urllib.parse
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, List, Dict
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,8 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bilibili_search_download_v2 import (
     HEADERS, COOKIE_FILE, load_cookies, cookie_dict_to_str,
     _parse_duration_minutes, ORDER_MAP,
-    DEFAULT_PAGE_SIZE, MAX_DURATION_MIN, MAX_SIZE_MB
+    DEFAULT_PAGE_SIZE, MAX_DURATION_MIN, MAX_SIZE_MB,
+    _fetch_wbi_keys, sign_params, _safe_dirname
 )
+
+import requests
 
 
 def download_keyword_videos(
@@ -32,87 +36,116 @@ def download_keyword_videos(
     order: str = "totalrank",
     limit: int = 5,
     progress_callback: Optional[Callable] = None
-) -> list[dict]:
+) -> List[Dict]:
     """
-    下载指定关键词的视频
-
+    下载指定关键词的视频（使用 WBI 签名）
     Args:
         keyword: 搜索关键词
         order: 排序方式 (totalrank/click/pubdate/dm/stow)
         limit: 下载数量上限
         progress_callback: 进度回调函数
-
     Returns:
         下载成功的视频信息列表
     """
-    import requests  # 延迟导入
-
-    if progress_callback:
-        progress_callback(f"开始搜索: {keyword}")
+    print(f"[DownloadWorker] 开始搜索关键词: {keyword}, 排序: {order}, 数量: {limit}")
 
     # 加载 cookies
     cookies = load_cookies(COOKIE_FILE)
     if cookies:
         HEADERS["Cookie"] = cookie_dict_to_str(cookies)
 
-    # 构建搜索 URL
-    search_url = "https://api.bilibili.com/x/web-interface/search/type"
-    params = {
+    session = requests.Session()
+    if cookies:
+        session.cookies = requests.utils.cookiejar_from_dict(cookies)
+
+    # 获取 WBI 签名密钥
+    try:
+        img_key, sub_key = _fetch_wbi_keys(session)
+        print(f"[DownloadWorker] WBI 密钥获取成功")
+    except Exception as e:
+        print(f"[DownloadWorker] WBI 密钥获取失败: {e}")
+        if progress_callback:
+            progress_callback(f"WBI密钥获取失败: {str(e)}")
+        return []
+
+    # 构建带签名的搜索参数
+    search_params = {
         "search_type": "video",
         "keyword": keyword,
-        "order": order,
         "page": 1,
-        "page_size": min(limit * 2, 20)  # 多获取一些以便过滤
+        "page_size": min(limit * 2, 20),
+        "order": order,
     }
+
+    signed_params = sign_params(search_params, img_key, sub_key)
+
+    print(f"[DownloadWorker] 调用 B站搜索 API...")
 
     # 搜索视频
     try:
-        response = requests.get(search_url, params=params, headers=HEADERS, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        resp = session.get(
+            "https://api.bilibili.com/x/web-interface/wbi/search/type",
+            params=signed_params,
+            headers=HEADERS,
+            timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as e:
+        print(f"[DownloadWorker] API 请求失败: {e}")
         if progress_callback:
             progress_callback(f"搜索失败: {str(e)}")
         return []
 
-    if data.get("code") != 0 or "data" not in data:
+    print(f"[DownloadWorker] API 返回: code={data.get('code')}, message={data.get('message')}")
+
+    if data.get("code") != 0:
+        print(f"[DownloadWorker] 搜索失败: {data.get('message')}")
         if progress_callback:
-            progress_callback(f"搜索结果为空")
+            progress_callback(f"搜索失败: {data.get('message')}")
         return []
 
-    videos = data["data"].get("result", [])
+    videos = data.get("data", {}).get("result", [])
+    print(f"[DownloadWorker] 搜索到 {len(videos)} 个视频")
+
     if not videos:
         if progress_callback:
-            progress_callback(f"未找到视频")
+            progress_callback("未找到视频")
         return []
 
     downloaded = []
 
-    # 使用 yt-dlp 下载视频
+    # 查找 ffmpeg 路径
     ffmpeg_path = _find_ffmpeg()
 
-    for video in videos[:limit]:
+    for i, video in enumerate(videos[:limit], 1):
         try:
-            bvid = video.get("bvid")
+            bvid = video.get("bvid", "")
             title = video.get("title", "")
+
             # 清理标题中的非法字符
             title = re.sub(r'[\\/:*?"<>|]', '_', title)
             # 清理 HTML 实体
             title = re.sub(r'&[a-z]+;', '', title)
+            title = title.strip()
 
             duration_str = video.get("duration", "0:00")
             duration_min = _parse_duration_minutes(duration_str)
 
             # 过滤时长
             if MAX_DURATION_MIN > 0 and duration_min > MAX_DURATION_MIN:
+                print(f"[DownloadWorker] 跳过 (时长过长): {title[:30]}")
                 if progress_callback:
                     progress_callback(f"跳过 (时长过长): {title[:30]}")
                 continue
 
+            if progress_callback:
+                progress_callback(f"下载 [{i}/{min(limit, len(videos))}]: {title[:40]}...")
+
             # 创建输出目录
-            output_dir = VIDEO / keyword
+            safe_keyword = _safe_dirname(keyword)
+            output_dir = VIDEO / safe_keyword
             output_dir.mkdir(parents=True, exist_ok=True)
-            output_template = str(output_dir / f"{title}.%(ext)s")
 
             # yt-dlp 下载命令
             cmd = [
@@ -120,7 +153,7 @@ def download_keyword_videos(
                 "--no-warnings",
                 "-f", "bestvideo+bestaudio/best",
                 "--merge-output-format", "mp4",
-                "-o", output_template,
+                "-o", str(output_dir / f"{title}.%(ext)s"),
             ]
 
             # 添加 ffmpeg 路径
@@ -134,8 +167,7 @@ def download_keyword_videos(
 
             cmd.append(f"https://www.bilibili.com/video/{bvid}")
 
-            if progress_callback:
-                progress_callback(f"下载: {title[:40]}...")
+            print(f"[DownloadWorker] 执行下载: {title}")
 
             # 执行下载
             result = subprocess.run(
@@ -146,7 +178,7 @@ def download_keyword_videos(
             )
 
             if result.returncode == 0:
-                # 获取下载的文件
+                # 查找下载的文件
                 output_files = list(output_dir.glob(f"{title}.mp4"))
                 if output_files:
                     output_file = output_files[0]
@@ -155,6 +187,7 @@ def download_keyword_videos(
                     # 过滤大小
                     if MAX_SIZE_MB > 0 and file_size > MAX_SIZE_MB:
                         output_file.unlink()
+                        print(f"[DownloadWorker] 删除 (过大): {title[:30]}")
                         if progress_callback:
                             progress_callback(f"删除 (过大): {title[:30]}")
                         continue
@@ -168,20 +201,24 @@ def download_keyword_videos(
                         "favorite": video.get("favorites", "N/A"),
                         "keyword": keyword
                     })
-
+                    print(f"[DownloadWorker] 下载成功: {title} ({file_size:.1f} MB)")
                     if progress_callback:
                         progress_callback(f"完成: {title[:40]} ({file_size:.1f} MB)")
             else:
+                print(f"[DownloadWorker] 下载失败: {title}, error={result.stderr[:200]}")
                 if progress_callback:
                     progress_callback(f"下载失败: {title[:30]}")
 
         except subprocess.TimeoutExpired:
+            print(f"[DownloadWorker] 下载超时: {video.get('title', '')[:30]}")
             if progress_callback:
-                progress_callback(f"下载超时: {video.get('title', '')[:30]}")
+                progress_callback(f"下载超时")
         except Exception as e:
+            print(f"[DownloadWorker] 错误: {e}")
             if progress_callback:
                 progress_callback(f"错误: {str(e)[:50]}")
 
+    print(f"[DownloadWorker] 下载完成, 找到 {len(downloaded)} 个视频")
     return downloaded
 
 
