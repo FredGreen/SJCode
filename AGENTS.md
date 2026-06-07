@@ -50,6 +50,16 @@ SJCode/
 ## 关键入口 / 核心模块
 
 ### 1. 桌面 UI（主要入口）
+
+UI 采用多页面导航布局，包含 4 个功能模块：
+
+| 页面 | 功能 |
+|------|------|
+| 📋 任务配置 | Excel 上传、任务预览、下载任务管理 |
+| 🎬 视频库 | 历史下载视频列表、选择加入 ASR 队列 |
+| 📝 转文字任务 | ASR 队列管理、视频转 Markdown |
+| ✨ 提炼总结 | 商机提炼总结、商机分析输出 |
+
 ```bash
 # 安装 UI 依赖
 pip install -r requirements_ui.txt
@@ -59,6 +69,13 @@ python -m ui.main_window
 # 或
 python ui/main_window.py
 ```
+
+**UI 操作流程**：
+1. 上传 Excel 任务文件 → 选择渠道 → 加入下载队列
+2. 开启抓取视频任务 → 自动下载到 `output/video/`
+3. 在视频库中选择视频 → 加入 ASR 队列
+4. 开启转文字任务 → 生成 Markdown 到 `output/docs/`
+5. 进入提炼总结页面 → 生成商机分析到 `output/summary/`
 
 ### 2. 视频转 Markdown（命令行）
 ```bash
