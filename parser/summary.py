@@ -103,13 +103,18 @@ def summarize_file(
             break
 
     # 调用 LLM 提炼
-    result = summarize(content, source=metadata.get("source", ""), author=metadata.get("author", ""))
+    source = metadata.get("source", "") if metadata else ""
+    author = metadata.get("author", "") if metadata else ""
+    result = summarize(content, source=source, author=author)
 
     # 生成输出内容
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    src = metadata.get('source', '未知') if metadata else '未知'
+    author_val = metadata.get('author', '未知') if metadata else '未知'
+    date_val = metadata.get('date', now) if metadata else now
     output_content = f"""# {title} - 商机组
 
-> 来源: {metadata.get('source', '未知')} | 作者: {metadata.get('author', '未知')} | 日期: {metadata.get('date', now)}  
+> 来源: {src} | 作者: {author_val} | 日期: {date_val}  
 > 提炼时间: {now}  
 > 原始文件: {input_path.name}
 
