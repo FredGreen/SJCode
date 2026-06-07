@@ -169,7 +169,9 @@ class ASRWorker(QThread):
             self.progress.emit(f"正在处理: {Path(self.video_path).name}")
             result = subprocess.run(
                 [sys.executable, "-m", "parser.main", self.video_path],
-                capture_output=True, text=True, cwd=str(BASE_DIR),
+                capture_output=True, text=True,
+                encoding='utf-8', errors='ignore',
+                cwd=str(BASE_DIR),
                 timeout=600
             )
             if result.returncode == 0:
