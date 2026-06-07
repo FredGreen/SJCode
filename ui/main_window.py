@@ -108,32 +108,45 @@ class DownloadWorker(QThread):
         self._running = True
 
     def run(self):
+        print(f"[DEBUG DownloadWorker] 线程启动，共 {len(self.tasks)} 个任务")
         try:
             for i, task in enumerate(self.tasks):
                 if not self._running:
+                    print("[DEBUG DownloadWorker] 任务被停止")
                     break
 
                 keyword = task["keyword"]
                 order = task.get("order", "totalrank")
                 limit = task.get("limit", 5)
+                
+                print(f"[DEBUG DownloadWorker] 开始任务 [{i+1}/{len(self.tasks)}]: keyword={keyword}, order={order}, limit={limit}")
 
                 self.progress.emit(f"[{i+1}/{len(self.tasks)}] 开始下载: {keyword}")
                 self.progress_value.emit(i + 1, len(self.tasks))
 
+                print(f"[DEBUG DownloadWorker] 导入 download_keyword_videos...")
                 from core.bilibili_search_download_v2_ui import download_keyword_videos
+                print(f"[DEBUG DownloadWorker] 调用 download_keyword_videos...")
+                
                 videos = download_keyword_videos(
                     keyword, order=order, limit=limit,
                     progress_callback=lambda msg: self.progress.emit(f"  {msg}")
                 )
+                
+                print(f"[DEBUG DownloadWorker] 下载完成，找到 {len(videos)} 个视频")
 
                 for video in videos:
                     self.video_added.emit(video)
 
                 self.progress.emit(f"  完成: {keyword} ({len(videos)} 个视频)")
 
+            print("[DEBUG DownloadWorker] 所有任务完成")
             self.finished.emit(True, "所有任务已完成")
 
         except Exception as e:
+            print(f"[DEBUG DownloadWorker] 异常: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.finished.emit(False, f"下载失败: {str(e)}")
 
     def stop(self):
@@ -591,12 +604,17 @@ class MainWindow(QMainWindow):
 
     def start_crawling(self):
         """开始下载任务"""
+        print("[DEBUG] start_crawling() 被调用")
+        
         if not self.current_tasks:
+            print("[DEBUG] 没有任务 - self.current_tasks 为空")
             QMessageBox.warning(self, "提示", "没有待执行的任务")
             return
 
         # 只下载未完成的任务
         pending_tasks = [t for t in self.current_tasks if t.get("status") != "completed"]
+        print(f"[DEBUG] 待执行任务数量: {len(pending_tasks)}")
+        
         if not pending_tasks:
             QMessageBox.warning(self, "提示", "所有任务已完成")
             return
@@ -604,6 +622,8 @@ class MainWindow(QMainWindow):
         self.start_crawl_btn.setEnabled(False)
         self.progress_bar.setMaximum(len(pending_tasks))
         self.progress_bar.setValue(0)
+        
+        print(f"[DEBUG] 开始创建 DownloadWorker，任务: {pending_tasks}")
 
         self.download_worker = DownloadWorker(pending_tasks)
         self.download_worker.progress.connect(self.on_download_progress)
@@ -611,6 +631,8 @@ class MainWindow(QMainWindow):
         self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.video_added.connect(self.on_video_added)
         self.download_worker.start()
+        
+        print("[DEBUG] DownloadWorker 已启动")
 
         self.status_bar.showMessage("下载中...")
 
