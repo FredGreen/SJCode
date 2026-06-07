@@ -1,0 +1,5 @@
+# SJCode UI 依赖
+# 用于 PySide6 桌面应用打包
+
+PySide6>=6.6.0
+openpyxl>=3.1.0

@@ -1,0 +1,8 @@
+[project]
+sub_id = "85617132"
+name = "SJCode"
+requires = ["python-3.10"]
+project_type = "backend"
+
+[preview]
+preview_enable = "disabled"

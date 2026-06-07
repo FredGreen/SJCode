@@ -1,0 +1,34 @@
+# --- 1. PyCharm / JetBrains IDE 专属忽略 ---
+ # 包含 workspace.xml, dataSources 等所有本地配置
+.idea/
+# 模块配置文件
+*.iml
+ # 某些版本的 PyCharm 产生的暂存区
+shelf/
+
+# --- 2. Python 专属忽略 ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.pytest_cache/
+.coverage
+
+# --- 3. 你的项目专属忽略（核心）---
+output/
+bin/
+*.log
+cookie.txt
+
+# --- 4. 打包生成文件忽略 ---
+dist/
+build/
+*.spec
+
+# --- 5. 其他系统/编辑器杂项 ---
+.DS_Store
+Thumbs.db
+.vscode/
