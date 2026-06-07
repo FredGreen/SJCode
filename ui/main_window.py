@@ -176,6 +176,8 @@ class ASRWorker(QThread):
                     self.progress.emit(f"  完成: {Path(video_path).name[:30]}")
                 else:
                     error_msg = result.stderr or '未知错误'
+                    print(f"[ASR错误] 视频: {video_path}")
+                    print(f"[ASR错误] 详情: {error_msg}")
                     database.update_transcription(transcription_id, 'failed', error_message=error_msg)
                     self.progress.emit(f"  失败: {error_msg[:50]}")
 
