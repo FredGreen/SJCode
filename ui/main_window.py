@@ -972,7 +972,7 @@ class VideoProcessorApp(QMainWindow):
     def refresh_all_tables(self):
         """刷新所有表格"""
         self.refresh_task_table()
-        self.refresh_history_table()
+        self.refresh_video_table()
         self.refresh_asr_table()
         self.refresh_transcription_table()
         self.refresh_summary_table()
