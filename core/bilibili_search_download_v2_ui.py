@@ -123,11 +123,19 @@ def download_keyword_videos(
             bvid = video.get("bvid", "")
             title = video.get("title", "")
 
-            # 清理标题中的非法字符
-            title = re.sub(r'[\\/:*?"<>|]', '_', title)
-            # 清理 HTML 实体
-            title = re.sub(r'&[a-z]+;', '', title)
-            title = title.strip()
+            # 清理标题中的非法字符和 HTML 实体
+            title = re.sub(r'[\\/:*?"<>|]', '_', title)  # Windows 非法字符
+            title = re.sub(r'&[a-z]+;', '', title)       # HTML 实体
+            title = re.sub(r'[<>\'\"]', '_', title)      # 额外清理
+            title = re.sub(r'_{2,}', '_', title)         # 多个下划线合并
+            title = title.strip().strip('._')            # 去除首尾空格和点下划线
+            
+            # 限制文件名长度（Windows 路径限制）
+            if len(title) > 100:
+                title = title[:100]
+            
+            if not title:
+                title = f"video_{bvid}"
 
             duration_str = video.get("duration", "0:00")
             duration_min = _parse_duration_minutes(duration_str)

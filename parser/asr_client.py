@@ -29,9 +29,13 @@ OSS_HEADERS = {"X-DashScope-OssResourceResolve": "enable"}
 
 
 def _cache_path(file_path: str) -> str:
-    """根据视频文件路径生成缓存文件路径"""
-    video_name = Path(file_path).stem
-    return os.path.join(ASR_CACHE_DIR, f"{video_name}.asr.json")
+    """根据视频文件路径生成缓存文件路径
+    使用文件绝对路径的 MD5 hash 作为文件名，避免特殊字符问题
+    """
+    import hashlib
+    # 使用文件绝对路径的 hash，确保同一文件总是生成相同的缓存名
+    file_hash = hashlib.md5(os.path.abspath(file_path).encode('utf-8')).hexdigest()[:16]
+    return os.path.join(ASR_CACHE_DIR, f"{file_hash}.asr.json")
 
 
 def _load_cache(file_path: str) -> list[dict] | None:
