@@ -124,11 +124,15 @@ def download_keyword_videos(
             title = video.get("title", "")
 
             # 清理标题中的非法字符和 HTML 实体
-            title = re.sub(r'[\\/:*?"<>|]', '_', title)  # Windows 非法字符
-            title = re.sub(r'&[a-z]+;', '', title)       # HTML 实体
-            title = re.sub(r'[<>\'\"]', '_', title)      # 额外清理
-            title = re.sub(r'_{2,}', '_', title)         # 多个下划线合并
-            title = title.strip().strip('._')            # 去除首尾空格和点下划线
+            # 清理 B站搜索关键词高亮标记: <em class="keyword_xxx">内容</em> 或 <em class=_keyword_xxx_>内容</em>
+            title = re.sub(r'<em\s+class=["\']?[^"\']*?["\']?>', '', title)  # 清理 <em class="...">
+            title = re.sub(r'</em>', '', title)                              # 清理 </em>
+            title = re.sub(r'_keyword_', '', title)                         # 清理 _keyword_ 标记
+            title = re.sub(r'[\\\/:：*?"""<>|]', ' ', title)               # Windows 非法字符
+            title = re.sub(r'[<>\'\"]', ' ', title)                         # 额外清理
+            title = re.sub(r'\s+', ' ', title)                             # 多个空格合并为一个
+            title = re.sub(r'_+', '_', title)                               # 多个下划线合并
+            title = title.strip().strip('._-')                              # 去除首尾空格和点下划线横线
             
             # 限制文件名长度（Windows 路径限制）
             if len(title) > 100:
@@ -154,6 +158,15 @@ def download_keyword_videos(
             safe_keyword = _safe_dirname(keyword)
             output_dir = VIDEO / safe_keyword
             output_dir.mkdir(parents=True, exist_ok=True)
+
+            # 检查文件是否已存在，存在则添加序号
+            output_file = output_dir / f"{title}.mp4"
+            counter = 1
+            base_title = title
+            while output_file.exists():
+                title = f"{base_title}_{counter}"
+                output_file = output_dir / f"{title}.mp4"
+                counter += 1
 
             # yt-dlp 下载命令
             cmd = [
