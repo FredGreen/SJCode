@@ -1,0 +1,29 @@
+# SJCode 全量依赖
+# 安装命令: pip install -r requirements-all.txt
+
+# ============ 基础依赖 ============
+requests>=2.28.0
+openpyxl>=3.1.0
+
+# ============ 视频下载 ============
+yt-dlp>=2023.0.0
+
+# ============ ASR 语音识别 ============
+dashscope>=1.14.0
+
+# ============ LLM 处理（与 dashscope 一起安装） ============
+# dashscope 已包含 Generation API
+
+# ============ UI 桌面应用 ============
+PySide6>=6.6.0
+
+# ============ 打包工具 ============
+pyinstaller>=6.0.0
+
+# ============ 可选依赖 ============
+# Cookie 管理（如果使用 bilibili_search_download 需要）
+# requests 会自动处理
+
+# ffmpeg（外部工具，不通过 pip 安装）
+# 下载地址: https://ffmpeg.org/download.html
+# 或将 ffmpeg.exe 放入项目 bin/ 目录
