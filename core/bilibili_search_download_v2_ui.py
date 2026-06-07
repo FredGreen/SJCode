@@ -169,11 +169,12 @@ def download_keyword_videos(
 
             print(f"[DownloadWorker] 执行下载: {title}")
 
-            # 执行下载
+            # 执行下载（使用 utf-8 编码避免 Windows gbk 解码错误）
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='ignore',
                 timeout=600
             )
 
