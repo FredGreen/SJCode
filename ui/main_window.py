@@ -866,6 +866,9 @@ class VideoProcessorApp(QMainWindow):
 
     # ========== 页面5: 设置 ==========
     def create_settings_page(self):
+        from pathlib import Path
+        BASE_DIR = Path(__file__).resolve().parent.parent
+        
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setSpacing(16)
