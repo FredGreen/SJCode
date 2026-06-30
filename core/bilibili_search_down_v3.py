@@ -5,14 +5,16 @@ bilibili-search-down-v3: B站视频搜索汇总工具
 功能：
   - 读取Excel中的检索词和类别
   - 调用B站搜索API获取视频列表信息
+  - 使用大模型对搜索结果进行相关性重排序
   - 输出为Excel（仅搜索，不下载视频）
 
 输入Excel格式（至少包含以下列）：
   - 类别（第一列）：如"商机"、"教程"等
   - 检索关键词（第二列）：如"Python教程"、"AI入门"等
+  - B站检索词（第三列）：用于B站搜索的关键词
 
 输出Excel格式：
-  类别 | 检索关键词 | B站检索关键词 | 视频讯号(bvid) | 视频标题 | 播放链接 |
+  类别 | 检索关键词 | B站检索词 | 视频讯号(bvid) | 视频标题 | 播放链接 |
   视频作者 | 播放时长 | 弹幕数量 | 收藏数量 | 点赞数量 | 播放次数 | 发布时间
 
 用法：
@@ -20,14 +22,15 @@ bilibili-search-down-v3: B站视频搜索汇总工具
   python bilibili_search_down_v3.py --input 商机组.xlsx --output 结果.xlsx
 
 依赖：
-  pip install requests openpyxl
+  pip install requests openpyxl dashscope
 
 注意：
   - 需要登录B站获取cookie以提高搜索配额
   - 请在 config/cookies.txt 放置cookies.txt文件
+  - 需要设置 DASHSCOPE_API_KEY 环境变量用于大模型排序
 """
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 import hashlib
 import json
@@ -42,11 +45,19 @@ from typing import Optional
 import openpyxl
 import requests
 
-# ===================== 配置 =====================
-
 # 添加项目路径
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# 导入大模型配置
+try:
+    from parser.config import DASHSCOPE_API_KEY, LLM_MODEL
+except ImportError:
+    DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+    LLM_MODEL = "qwen-plus"
+
+# 大模型相关配置
+LLM_TOP_N = 5  # 大模型排序后保留前N条
 
 HEADERS = {
     "User-Agent": (
@@ -233,7 +244,7 @@ def read_input_excel(filepath: str) -> list[dict]:
 
 # ===================== B站搜索 =====================
 
-def search_videos(keyword: str, page_size: int = 5) -> list[dict]:
+def search_videos(keyword: str, page_size: int = 30) -> list[dict]:
     """
     搜索B站视频（仅获取信息，不下载）
     过滤：弹幕数量为0、无播放链接、播放时长为空的视频会被忽略
@@ -335,6 +346,126 @@ def search_videos(keyword: str, page_size: int = 5) -> list[dict]:
     return videos
 
 
+# ===================== 大模型重排序 =====================
+
+def _call_llm(prompt: str) -> str:
+    """调用大模型并返回原始文本内容"""
+    api_key = DASHSCOPE_API_KEY
+    if not api_key:
+        raise ValueError("请设置 DASHSCOPE_API_KEY 环境变量")
+    
+    import dashscope
+    from dashscope import Generation
+    
+    dashscope.api_key = api_key
+    
+    response = Generation.call(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        result_format="message",
+    )
+    
+    if response.status_code != 200:
+        raise RuntimeError(f"LLM调用失败: {response.message}")
+    
+    return response.output.choices[0].message.content.strip()
+
+
+def _extract_json(content: str) -> list:
+    """从LLM返回中提取JSON列表"""
+    if content.startswith("```"):
+        lines = content.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        content = "\n".join(lines)
+    try:
+        result = json.loads(content)
+        if isinstance(result, list):
+            return result
+        elif isinstance(result, dict) and "ranked" in result:
+            return result["ranked"]
+        else:
+            return []
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"LLM返回的JSON解析失败: {e}\n原始内容: {content[:500]}")
+
+
+def rerank_videos_by_llm(
+    videos: list[dict],
+    category: str,
+    search_keyword: str,
+    bilibili_keyword: str,
+    top_n: int = LLM_TOP_N
+) -> list[dict]:
+    """
+    使用大模型对视频进行相关性重排序
+    
+    Args:
+        videos: 视频列表
+        category: 类别
+        search_keyword: 检索关键词
+        bilibili_keyword: B站检索词
+        top_n: 保留前N条
+    
+    Returns:
+        重排序后的视频列表（最多top_n条）
+    """
+    if not videos:
+        return []
+    
+    if len(videos) <= top_n:
+        return videos
+    
+    # 构造带编号的视频标题列表
+    numbered_titles = []
+    for i, video in enumerate(videos):
+        numbered_titles.append(f"[{i}] {video['title']}")
+    titles_text = "\n".join(numbered_titles)
+    
+    prompt = f"""你是一个专业的视频内容相关性评估专家。请根据以下三个条件，对视频标题进行相关性排序：
+
+**评估条件：**
+1. 类别：{category}
+2. 检索关键词：{search_keyword}
+3. B站检索词：{bilibili_keyword}
+
+**排序要求：**
+- 根据视频标题与上述三个条件的**综合相关性**进行排序
+- 优先保留与"类别"和"检索关键词"高度相关的视频
+- 考虑标题是否准确反映了搜索意图
+- 忽略标题党、低质量、明显不相关的视频
+
+**输出格式：**
+请严格按以下JSON格式输出排序结果（索引从0开始），不要输出其他内容：
+{{
+  "ranked": [0, 3, 1, 5, 2]
+}}
+
+其中 ranked 数组包含排序后的视频索引，按相关性从高到低排列。
+
+**待排序的视频标题列表：**
+{titles_text}
+
+请输出相关性最高的前 {top_n} 个视频的索引。"""
+
+    try:
+        print(f"  [LLM] 调用大模型重排序 {len(videos)} 条视频...")
+        content = _call_llm(prompt)
+        ranked_indices = _extract_json(content)
+        
+        # 根据排序结果重新组织视频列表
+        ranked_videos = []
+        for idx in ranked_indices[:top_n]:
+            if 0 <= idx < len(videos):
+                ranked_videos.append(videos[idx])
+        
+        print(f"  [LLM] 重排序完成，保留 {len(ranked_videos)} 条最相关视频")
+        return ranked_videos
+        
+    except Exception as e:
+        print(f"  [LLM] 重排序失败: {e}，使用原始顺序")
+        return videos[:top_n]
+
+
 # ===================== Excel 输出 =====================
 
 def write_output_excel(filepath: str, data: list[dict]):
@@ -397,7 +528,7 @@ def main():
     parser = argparse.ArgumentParser(description="B站视频搜索汇总工具 v3")
     parser.add_argument("--input", "-i", default=None, help="输入Excel路径")
     parser.add_argument("--output", "-o", default=None, help="输出Excel路径")
-    parser.add_argument("--count", "-c", type=int, default=5, help="每个关键词搜索数量(默认5)")
+    parser.add_argument("--count", "-c", type=int, default=30, help="每个关键词搜索数量(默认30)")
     args = parser.parse_args()
 
     # 自动查找输入文件
@@ -434,6 +565,7 @@ def main():
     # 搜索并汇总
     print(f"\n{'='*50}")
     print(f"开始搜索，共 {len(tasks)} 个关键词，每个获取 {args.count} 条结果")
+    print(f"大模型重排序后保留前 {LLM_TOP_N} 条最相关视频")
     print(f"{'='*50}\n")
 
     all_results = []
@@ -446,16 +578,34 @@ def main():
 
         print(f"[{i}/{len(tasks)}] 搜索: 「{bilibili_keyword}」(类别: {category})")
 
+        # 1. 搜索视频
         videos = search_videos(bilibili_keyword, args.count)
+        
+        if not videos:
+            print(f"       → 无有效视频\n")
+            continue
+        
+        print(f"       → 搜索到 {len(videos)} 条有效视频")
+        
+        # 2. 大模型重排序
+        if DASHSCOPE_API_KEY and len(videos) > LLM_TOP_N:
+            videos = rerank_videos_by_llm(
+                videos, category, search_keyword, bilibili_keyword, LLM_TOP_N
+            )
+        else:
+            if not DASHSCOPE_API_KEY:
+                print(f"  [提示] 未设置 DASHSCOPE_API_KEY，跳过大模型重排序")
+            videos = videos[:LLM_TOP_N]
 
+        # 3. 添加到结果
         for video in videos:
             video["category"] = category
-            video["search_keyword"] = search_keyword    # 检索关键词
-            video["bilibili_keyword"] = bilibili_keyword  # B站检索词
+            video["search_keyword"] = search_keyword
+            video["bilibili_keyword"] = bilibili_keyword
             all_results.append(video)
 
         total_videos += len(videos)
-        print(f"       → 获取 {len(videos)} 条有效视频\n")
+        print(f"       → 最终保留 {len(videos)} 条视频\n")
 
         # 避免请求过快
         if i < len(tasks):
@@ -463,7 +613,7 @@ def main():
 
     # 写入结果
     print(f"{'='*50}")
-    print(f"搜索完成！共 {len(tasks)} 个关键词，{total_videos} 条有效视频")
+    print(f"搜索完成！共 {len(tasks)} 个关键词，{total_videos} 条最终视频")
     print(f"{'='*50}")
 
     write_output_excel(args.output, all_results)
