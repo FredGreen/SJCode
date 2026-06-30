@@ -155,7 +155,9 @@ def sign_params(params: dict, img_key: str, sub_key: str) -> dict:
 def read_input_excel(filepath: str) -> list[dict]:
     """
     读取输入Excel
-    返回: [{"category": "商机", "keyword": "AI教程"}, ...]
+    格式：类别 | 检索关键词 | B站检索词
+    只用 B站检索词 作为搜索条件
+    返回: [{"category": "商机", "search_keyword": "AI教程", "bilibili_keyword": "AI教程"}, ...]
     """
     print(f"[读取] 打开Excel: {filepath}")
 
@@ -163,33 +165,65 @@ def read_input_excel(filepath: str) -> list[dict]:
     ws = wb.active
 
     tasks = []
+    header_row = None
+    
     for i, row in enumerate(ws.iter_rows(values_only=True)):
-        if i == 0:  # 跳过表头
-            continue
         if not row or not any(row):
             continue
-
-        # 获取类别和关键词（支持不同列顺序）
+        
+        # 第一行可能是表头，检查并记录列位置
+        if i == 0:
+            row_str = [str(c).strip() if c else "" for c in row]
+            if "类别" in row_str or "检索关键词" in row_str or "B站检索词" in row_str:
+                header_row = row_str
+                continue
+        
+        # 解析列数据
         category = ""
-        keyword = ""
-
-        # 尝试读取第一列和第二列
-        if len(row) >= 2:
-            category = str(row[0]).strip() if row[0] else ""
-            keyword = str(row[1]).strip() if row[1] else ""
-        elif len(row) >= 1:
-            keyword = str(row[0]).strip() if row[0] else ""
-
-        if not keyword:
+        search_keyword = ""
+        bilibili_keyword = ""
+        
+        if header_row:
+            # 根据表头定位列
+            try:
+                cat_idx = header_row.index("类别")
+                category = str(row[cat_idx]).strip() if row[cat_idx] else ""
+            except (ValueError, IndexError):
+                pass
+            try:
+                sk_idx = header_row.index("检索关键词")
+                search_keyword = str(row[sk_idx]).strip() if row[sk_idx] else ""
+            except (ValueError, IndexError):
+                pass
+            try:
+                bk_idx = header_row.index("B站检索词")
+                bilibili_keyword = str(row[bk_idx]).strip() if row[bk_idx] else ""
+            except (ValueError, IndexError):
+                pass
+        else:
+            # 没有表头，按默认顺序：类别 | 检索关键词 | B站检索词
+            if len(row) >= 3:
+                category = str(row[0]).strip() if row[0] else ""
+                search_keyword = str(row[1]).strip() if row[1] else ""
+                bilibili_keyword = str(row[2]).strip() if row[2] else ""
+            elif len(row) >= 2:
+                category = str(row[0]).strip() if row[0] else ""
+                bilibili_keyword = str(row[1]).strip() if row[1] else ""
+            elif len(row) >= 1:
+                bilibili_keyword = str(row[0]).strip() if row[0] else ""
+        
+        # 必须有B站检索词才加入任务
+        if not bilibili_keyword:
             continue
-
+        
         # 跳过标题行
-        if keyword in ["检索关键词", "关键词", "keyword", "搜索词"]:
+        if bilibili_keyword in ["B站检索词", "检索词", "搜索词"]:
             continue
-
+        
         tasks.append({
             "category": category or "未分类",
-            "keyword": keyword,
+            "search_keyword": search_keyword or bilibili_keyword,  # 检索关键词默认为B站检索词
+            "bilibili_keyword": bilibili_keyword,
         })
 
     wb.close()
@@ -199,9 +233,10 @@ def read_input_excel(filepath: str) -> list[dict]:
 
 # ===================== B站搜索 =====================
 
-def search_videos(keyword: str, page_size: int = 20) -> list[dict]:
+def search_videos(keyword: str, page_size: int = 5) -> list[dict]:
     """
     搜索B站视频（仅获取信息，不下载）
+    过滤：弹幕数量为0、无播放链接、播放时长为空的视频会被忽略
     """
     session = requests.Session()
     cookies = load_cookies()
@@ -246,6 +281,8 @@ def search_videos(keyword: str, page_size: int = 20) -> list[dict]:
         return []
 
     videos = []
+    filtered_count = 0
+    
     for item in results:
         # 清理标题中的HTML标签
         title = item.get("title", "").replace('<em class="keyword">', "").replace("</em>", "")
@@ -261,6 +298,23 @@ def search_videos(keyword: str, page_size: int = 20) -> list[dict]:
 
         # 格式化时长
         duration = item.get("duration", "")
+        
+        # 获取弹幕数量
+        danmaku = item.get("video_review", 0) or 0
+
+        # ===== 过滤逻辑 =====
+        # 1. 没有播放链接
+        if not url or not bvid:
+            filtered_count += 1
+            continue
+        # 2. 播放时长为空
+        if not duration:
+            filtered_count += 1
+            continue
+        # 3. 弹幕数量为0
+        if danmaku <= 0:
+            filtered_count += 1
+            continue
 
         videos.append({
             "bvid": bvid,
@@ -268,12 +322,15 @@ def search_videos(keyword: str, page_size: int = 20) -> list[dict]:
             "url": url,
             "author": item.get("author", ""),
             "duration": duration,
-            "danmaku": item.get("video_review", 0),
+            "danmaku": danmaku,
             "favorites": item.get("favorites", 0),
             "like": item.get("like", 0),
             "play": item.get("play", 0),
             "pubdate": pubdate_str,
         })
+
+    if filtered_count > 0:
+        print(f"[过滤] 忽略 {filtered_count} 条无效视频（无链接/无时长/无弹幕）")
 
     return videos
 
@@ -283,7 +340,7 @@ def search_videos(keyword: str, page_size: int = 20) -> list[dict]:
 def write_output_excel(filepath: str, data: list[dict]):
     """
     写入结果Excel
-    列：类别 | 检索关键词 | B站检索关键词 | 视频讯号 | 视频标题 | 播放链接 |
+    列：类别 | 检索关键词 | B站检索词 | 视频讯号(bvid) | 视频标题 | 播放链接 |
         视频作者 | 播放时长 | 弹幕数量 | 收藏数量 | 点赞数量 | 播放次数 | 发布时间
     """
     print(f"[写入] 生成Excel: {filepath}")
@@ -294,7 +351,7 @@ def write_output_excel(filepath: str, data: list[dict]):
 
     # 表头
     headers = [
-        "类别", "检索关键词", "B站检索关键词", "视频讯号(bvid)", "视频标题", "播放链接",
+        "类别", "检索关键词", "B站检索词", "视频讯号(bvid)", "视频标题", "播放链接",
         "视频作者", "播放时长", "弹幕数量", "收藏数量", "点赞数量", "播放次数", "发布时间"
     ]
     ws.append(headers)
@@ -303,8 +360,8 @@ def write_output_excel(filepath: str, data: list[dict]):
     for item in data:
         ws.append([
             item.get("category", ""),
-            item.get("search_keyword", ""),  # 检索关键词
-            item.get("keyword", ""),          # B站检索关键词
+            item.get("search_keyword", ""),   # 检索关键词
+            item.get("bilibili_keyword", ""), # B站检索词
             item.get("bvid", ""),
             item.get("title", ""),
             item.get("url", ""),
@@ -340,7 +397,7 @@ def main():
     parser = argparse.ArgumentParser(description="B站视频搜索汇总工具 v3")
     parser.add_argument("--input", "-i", default=None, help="输入Excel路径")
     parser.add_argument("--output", "-o", default=None, help="输出Excel路径")
-    parser.add_argument("--count", "-c", type=int, default=20, help="每个关键词搜索数量(默认20)")
+    parser.add_argument("--count", "-c", type=int, default=5, help="每个关键词搜索数量(默认5)")
     args = parser.parse_args()
 
     # 自动查找输入文件
@@ -384,20 +441,21 @@ def main():
 
     for i, task in enumerate(tasks, 1):
         category = task["category"]
-        keyword = task["keyword"]
+        search_keyword = task["search_keyword"]      # 检索关键词（用于输出）
+        bilibili_keyword = task["bilibili_keyword"]  # B站检索词（用于搜索）
 
-        print(f"[{i}/{len(tasks)}] 搜索: 「{keyword}」(类别: {category})")
+        print(f"[{i}/{len(tasks)}] 搜索: 「{bilibili_keyword}」(类别: {category})")
 
-        videos = search_videos(keyword, args.count)
+        videos = search_videos(bilibili_keyword, args.count)
 
         for video in videos:
             video["category"] = category
-            video["search_keyword"] = category  # 检索关键词列用类别
-            video["keyword"] = keyword            # B站检索关键词
+            video["search_keyword"] = search_keyword    # 检索关键词
+            video["bilibili_keyword"] = bilibili_keyword  # B站检索词
             all_results.append(video)
 
         total_videos += len(videos)
-        print(f"       → 获取 {len(videos)} 条视频\n")
+        print(f"       → 获取 {len(videos)} 条有效视频\n")
 
         # 避免请求过快
         if i < len(tasks):
@@ -405,7 +463,7 @@ def main():
 
     # 写入结果
     print(f"{'='*50}")
-    print(f"搜索完成！共 {len(tasks)} 个关键词，{total_videos} 条视频")
+    print(f"搜索完成！共 {len(tasks)} 个关键词，{total_videos} 条有效视频")
     print(f"{'='*50}")
 
     write_output_excel(args.output, all_results)
