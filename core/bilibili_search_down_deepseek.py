@@ -40,7 +40,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # ===================== 配置 =====================
 
 # DeepSeek 配置
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEY = "sk-d2e27860aa3243668a95a85e2bf8edcb"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"  # 可选: deepseek-chat, deepseek-reasoner
 
@@ -199,7 +199,7 @@ def _call_deepseek(prompt: str, system_prompt: str = None) -> str:
     """调用 DeepSeek API"""
     api_key = DEEPSEEK_API_KEY
     if not api_key:
-        raise ValueError("请设置 DEEPSEEK_API_KEY 环境变量")
+        raise ValueError("DEEPSEEK_API_KEY 未配置")
     
     import requests
     
@@ -453,10 +453,6 @@ def main():
 
     DEEPSEEK_MODEL = args.model
     WHISPER_MODEL = args.whisper_model
-
-    if not DEEPSEEK_API_KEY:
-        print("[错误] 请设置 DEEPSEEK_API_KEY 环境变量")
-        sys.exit(1)
 
     try:
         output_path = process_video(args.video, args.output)
