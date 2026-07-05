@@ -140,13 +140,26 @@ def transcribe_with_whisper(video_path: str, use_cache: bool = True) -> list[dic
         audio_path
     ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Windows 下需要处理编码问题
+    result = subprocess.run(
+        cmd, 
+        capture_output=True, 
+        text=True,
+        encoding='utf-8',
+        errors='ignore'
+    )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 提取音频失败: {result.stderr}")
 
     try:
         # 导入 whisper
-        import whisper
+        try:
+            import whisper
+        except ImportError:
+            raise ImportError(
+                "未安装 whisper 模块，请运行: pip install openai-whisper\n"
+                "或者使用其他 ASR 方案（如阿里云 ASR）"
+            )
         
         print(f"  [Whisper] 加载模型 {WHISPER_MODEL}...")
         model = whisper.load_model(WHISPER_MODEL)
