@@ -35,6 +35,7 @@ from datetime import datetime
 
 # 添加项目路径
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BASE_DIR = PROJECT_ROOT  # 项目根目录
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # ===================== 配置 =====================
