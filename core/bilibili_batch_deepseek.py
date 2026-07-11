@@ -57,6 +57,9 @@ PROGRESS_FILE = PROJECT_ROOT / "output" / "batch_progress.json"  # 进度记录
 # yt-dlp 配置
 YTDLP_TIMEOUT = 600  # 下载超时（秒）
 
+# Cookies 文件路径
+COOKIE_FILE = PROJECT_ROOT / "config" / "cookies.txt"
+
 
 # ===================== 进度管理 =====================
 
@@ -214,8 +217,14 @@ def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional
         "--no-warnings",
         "--socket-timeout", "30",
         "--retries", "3",
-        url
     ]
+    
+    # 添加 cookies（如果存在）
+    if COOKIE_FILE.exists():
+        cmd.extend(["--cookies", str(COOKIE_FILE)])
+        print(f"  [下载] 使用cookies: {COOKIE_FILE}")
+    
+    cmd.append(url)
     
     try:
         result = subprocess.run(
