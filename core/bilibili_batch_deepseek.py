@@ -274,12 +274,13 @@ def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional
     if ffmpeg_path:
         cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
     
-    # 添加 cookies（使用 --add-header 方式，与 bilibili_search_download_v2_ui.py 相同）
-    cookies = load_cookies()
-    if cookies:
-        cookie_str = cookie_dict_to_str(cookies)
-        cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
-        print(f"  [下载] 使用cookies")
+    # 添加 cookies（使用 --cookies 文件方式）
+    cookies_file = BASE_DIR / "config" / "cookies.txt"
+    if cookies_file.exists():
+        print(f"  [下载] 使用cookies文件: {cookies_file}")
+        cmd.extend(["--cookies", str(cookies_file)])
+    else:
+        print(f"  [下载] 警告: cookies文件不存在: {cookies_file}")
     
     cmd.append(url)
     
