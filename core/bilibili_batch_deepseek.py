@@ -61,6 +61,53 @@ YTDLP_TIMEOUT = 600  # 下载超时（秒）
 COOKIE_FILE = PROJECT_ROOT / "config" / "cookies.txt"
 
 
+# ===================== Cookies 处理 =====================
+
+def load_cookies() -> dict:
+    """从 cookies.txt 加载 cookies（Netscape 格式）"""
+    if not COOKIE_FILE.exists():
+        return {}
+    
+    cookies = {}
+    try:
+        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    name = parts[5]
+                    value = parts[6]
+                    cookies[name] = value
+    except Exception as e:
+        print(f"[警告] 读取 cookies 失败: {e}")
+    
+    return cookies
+
+
+def cookie_dict_to_str(cookies: dict) -> str:
+    """将 cookie 字典转为字符串"""
+    return "; ".join([f"{k}={v}" for k, v in cookies.items()])
+
+
+def _find_ffmpeg() -> str:
+    """查找 ffmpeg 路径"""
+    import shutil
+    path = shutil.which("ffmpeg")
+    if path:
+        return path
+    
+    # 检查项目 bin 目录
+    bin_dir = PROJECT_ROOT / "bin"
+    if bin_dir.exists():
+        ffmpeg_path = bin_dir / "ffmpeg.exe"
+        if ffmpeg_path.exists():
+            return str(ffmpeg_path)
+    
+    return ""
+
+
 # ===================== 进度管理 =====================
 
 def _load_progress() -> dict:
@@ -189,9 +236,11 @@ def _safe_filename(name: str) -> str:
 
 def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional[str]:
     """
-    使用 yt-dlp 下载视频
+    使用 yt-dlp 下载视频（与 bilibili_search_download_v2_ui.py 相同方式）
     返回: 视频文件路径，失败返回 None
     """
+    import sys
+    
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
     
     # 文件名：bvid_标题
@@ -208,21 +257,29 @@ def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional
     print(f"  [下载] 开始下载: {title[:50]}...")
     print(f"  [下载] URL: {url}")
     
+    # yt-dlp 下载命令（与 bilibili_search_download_v2_ui.py 相同）
     cmd = [
-        "yt-dlp",
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        sys.executable, "-m", "yt_dlp",
+        "--no-warnings",
+        "-f", "bestvideo+bestaudio/best",
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--no-playlist",
-        "--no-warnings",
         "--socket-timeout", "30",
         "--retries", "3",
     ]
     
-    # 添加 cookies（如果存在）
-    if COOKIE_FILE.exists():
-        cmd.extend(["--cookies", str(COOKIE_FILE)])
-        print(f"  [下载] 使用cookies: {COOKIE_FILE}")
+    # 添加 ffmpeg 路径
+    ffmpeg_path = _find_ffmpeg()
+    if ffmpeg_path:
+        cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
+    
+    # 添加 cookies（使用 --add-header 方式，与 bilibili_search_download_v2_ui.py 相同）
+    cookies = load_cookies()
+    if cookies:
+        cookie_str = cookie_dict_to_str(cookies)
+        cmd.extend(["--add-header", f"Cookie:{cookie_str}"])
+        print(f"  [下载] 使用cookies")
     
     cmd.append(url)
     
@@ -230,7 +287,6 @@ def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
             encoding='utf-8',
             errors='ignore',
             timeout=YTDLP_TIMEOUT
@@ -247,13 +303,14 @@ def download_video(url: str, bvid: str, title: str, output_dir: str) -> Optional
                 print(f"  [下载] 完成: {check_path}")
                 return check_path
         
-        # 尝试从输出中提取文件名
-        for line in result.stdout.split("\n"):
-            if "Destination:" in line or "has already been downloaded" in line:
-                # 提取文件路径
-                pass
+        # 尝试查找目录中的新文件
+        for f in VIDEO_DIR.iterdir():
+            if f.suffix.lower() in [".mp4", ".mkv", ".webm", ".flv"]:
+                if bvid in f.stem or safe_title in f.stem:
+                    print(f"  [下载] 完成: {f}")
+                    return str(f)
         
-        print(f"  [下载] 未找到下载的文件")
+        print(f"  [下载] 失败: 找不到下载的文件")
         return None
         
     except subprocess.TimeoutExpired:
