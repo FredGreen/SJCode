@@ -107,37 +107,47 @@ dist/SJCode_V2.exe
 
 ### 用户使用说明
 
-1. **将 exe 放到任意目录**（如 `D:\SJCode\`）
+1. **将 exe 放到任意目录**（如桌面、文档、U盘等任意位置）
 
-2. **创建 config 目录**（用于存放 cookies）：
+2. **程序会自动在 exe 所在目录创建以下文件夹**：
    ```
-   D:\SJCode\
-   ├── SJCode_V2.exe
-   └── config\
-       └── cookies.txt    ← 用户通过 UI 上传或手动放置
+   config\        ← 存放 cookies
+   output\        ← 存放下载的视频和文档
    ```
 
 3. **运行 exe**：
    - 双击 `SJCode_V2.exe` 即可运行
-   - 程序会在 exe 所在目录自动创建 `output` 目录
+   - 无需安装 Python
 
 4. **上传 Cookies**：
    - 在程序中使用「Cookie 管理」功能上传
-   - 或手动将 cookies.txt 放到 `config\` 目录
+   - 或手动将 cookies.txt 放到 exe 旁边的 `config\` 目录
 
-### 目录结构
+### 示例：exe 放在桌面
 
-运行后会自动创建：
 ```
-D:\SJCode\
+C:\Users\用户名\Desktop\
 ├── SJCode_V2.exe
 ├── config\
-│   └── cookies.txt       ← B站 cookies
+│   └── cookies.txt
 └── output\
-    ├── v2_videos\        ← 下载的视频
-    ├── v2_docs\          ← 生成的 Markdown 文档
-    └── v2_asr_cache\     ← ASR 缓存
+    ├── v2_videos\
+    ├── v2_docs\
+    └── v2_asr_cache\
 ```
+
+### 示例：exe 放在 U 盘
+
+```
+E:\（U盘）
+├── SJCode_V2.exe
+├── config\
+│   └── cookies.txt
+└── output\
+    └── ...
+```
+
+程序会自动适配 exe 所在位置，无需关心具体路径。
 
 用户无需安装 Python，直接运行 exe 即可使用。
 
