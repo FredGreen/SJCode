@@ -185,12 +185,27 @@ def transcribe_with_whisper(
         if sys.stderr is None:
             sys.stderr = open(os.devnull, 'w', encoding='utf-8')
         
-        if progress_callback:
-            progress_callback("加载模型...")
-        model_obj = whisper.load_model(model)
+        # 检测 GPU
+        import torch
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+            gpu_name = torch.cuda.get_device_name(0)
+            if progress_callback:
+                progress_callback(f"✓ 检测到 GPU: {gpu_name}")
+                progress_callback(f"✓ 使用 GPU 加速")
+        else:
+            if progress_callback:
+                progress_callback("✗ 未检测到 GPU，使用 CPU")
         
         if progress_callback:
-            progress_callback("开始识别（这可能需要几分钟）...")
+            progress_callback(f"加载模型 {model} 到 {device.upper()}...")
+        
+        # 加载模型到指定设备
+        model_obj = whisper.load_model(model, device=device)
+        
+        if progress_callback:
+            progress_callback("开始识别...")
         
         # 使用 verbose=True 显示进度
         result = model_obj.transcribe(
