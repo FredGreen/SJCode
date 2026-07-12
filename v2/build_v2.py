@@ -114,15 +114,13 @@ def build_exe():
     ]
     exclude_str = " ".join([f"--exclude-module={m}" for m in excludes])
     
-    # PyInstaller 命令
+    # PyInstaller 命令（简化配置，避免兼容性问题）
     cmd = f'''pyinstaller
         --name="{app_name}"
         --windowed
         --onefile
         --clean
         --noconfirm
-        --collect-all PySide6
-        --collect-all yt_dlp
         {hidden_import_str}
         {exclude_str}
         {add_data}
