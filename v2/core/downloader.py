@@ -188,10 +188,10 @@ def download_video(
         progress_callback(f"URL: {url}")
     
     # 使用 yt_dlp Python API 直接调用（打包后也能正常工作）
-    # 格式选择：使用 B站可用的格式
-    # bv*+ba 表示最佳视频+最佳音频，会自动合并
+    # 格式选择：使用不需要 ffmpeg 合并的格式
+    # b 表示最佳单一格式（已包含音视频），不需要合并
     ydl_opts = {
-        'format': 'bv*+ba/b',
+        'format': 'b',
         'outtmpl': output_template,
         'noplaylist': True,
         'socket_timeout': 15,
@@ -199,8 +199,6 @@ def download_video(
         'no_check_certificates': True,
         'quiet': False,
         'no_warnings': False,
-        # 如果没有 ffmpeg，使用不需要合并的格式
-        'merge_output_format': 'mp4',
     }
     
     # 添加 ffmpeg 路径
