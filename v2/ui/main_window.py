@@ -340,10 +340,7 @@ class MainWindow(QMainWindow):
         # 刷新视频库
         self.refresh_video_library()
         
-        QMessageBox.information(
-            self, "完成", 
-            f"下载完成!\n\n成功: {success}\n跳过: {skipped}\n失败: {failed}"
-        )
+        # 不弹窗，只在日志显示结果
     
     # ===================== 视频库 Tab =====================
     
