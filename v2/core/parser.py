@@ -158,6 +158,12 @@ def transcribe_with_whisper(
     try:
         import whisper
         
+        # 确保 stdout/stderr 不为 None（打包后可能为 None）
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+        
         if progress_callback:
             progress_callback("加载模型...")
         model_obj = whisper.load_model(model)
