@@ -38,7 +38,7 @@ BASE_DIR = PROJECT_ROOT
 DEFAULT_VIDEO_DIR = PROJECT_ROOT / "output" / "v2_videos"
 
 # yt-dlp 配置
-YTDLP_TIMEOUT = 600  # 下载超时（秒）
+YTDLP_TIMEOUT = 120  # 下载超时（秒）- 减少超时时间
 
 # Cookies 文件路径（默认）
 DEFAULT_COOKIE_FILE = PROJECT_ROOT / "config" / "cookies.txt"
@@ -190,13 +190,13 @@ def download_video(
     # yt-dlp 下载命令
     cmd = [
         sys.executable, "-m", "yt_dlp",
-        "--no-warnings",
         "-f", "bestvideo+bestaudio/best",
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--no-playlist",
-        "--socket-timeout", "30",
+        "--socket-timeout", "15",
         "--retries", "3",
+        "--no-check-certificates",
     ]
     
     # 添加 ffmpeg 路径
@@ -217,31 +217,45 @@ def download_video(
     
     try:
         if progress_callback:
-            progress_callback(f"执行命令: {' '.join(cmd[:5])}...")
+            progress_callback(f"开始下载...")
         
-        result = subprocess.run(
+        # 使用 Popen 实时获取输出
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             encoding='utf-8',
             errors='ignore',
-            timeout=YTDLP_TIMEOUT
+            bufsize=1,
+            universal_newlines=True
         )
         
-        if progress_callback:
-            if result.stdout:
-                progress_callback(f"输出: {result.stdout[:200]}")
+        # 实时读取输出
+        output_lines = []
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                output_lines.append(line)
+                # 显示进度（每 5 行显示一次）
+                if len(output_lines) % 5 == 0 and progress_callback:
+                    progress_callback(f"  {line[:80]}")
         
-        if result.returncode != 0:
+        process.wait(timeout=YTDLP_TIMEOUT)
+        
+        if process.returncode != 0:
             if progress_callback:
-                progress_callback(f"下载失败 (code={result.returncode}): {result.stderr[:300]}")
+                progress_callback(f"下载失败: {output_lines[-3:] if output_lines else '未知错误'}")
             return None
+        
+        if progress_callback:
+            progress_callback("下载完成，检查文件...")
         
         # 查找下载的文件
         for ext in ["mp4", "mkv", "webm", "flv"]:
             check_path = output_dir / f"{bvid}_{safe_title}.{ext}"
             if check_path.exists():
                 if progress_callback:
-                    progress_callback(f"下载完成: {check_path}")
+                    progress_callback(f"找到文件: {check_path}")
                 return str(check_path)
         
         # 尝试查找目录中的新文件
@@ -249,7 +263,7 @@ def download_video(
             if f.suffix.lower() in [".mp4", ".mkv", ".webm", ".flv"]:
                 if bvid in f.stem or safe_title in f.stem:
                     if progress_callback:
-                        progress_callback(f"下载完成: {f}")
+                        progress_callback(f"找到文件: {f}")
                     return str(f)
         
         if progress_callback:
