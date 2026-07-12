@@ -216,6 +216,9 @@ def download_video(
     cmd.append(url)
     
     try:
+        if progress_callback:
+            progress_callback(f"执行命令: {' '.join(cmd[:5])}...")
+        
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -224,9 +227,13 @@ def download_video(
             timeout=YTDLP_TIMEOUT
         )
         
+        if progress_callback:
+            if result.stdout:
+                progress_callback(f"输出: {result.stdout[:200]}")
+        
         if result.returncode != 0:
             if progress_callback:
-                progress_callback(f"下载失败: {result.stderr[:200]}")
+                progress_callback(f"下载失败 (code={result.returncode}): {result.stderr[:300]}")
             return None
         
         # 查找下载的文件
@@ -247,6 +254,7 @@ def download_video(
         
         if progress_callback:
             progress_callback("下载失败: 找不到下载的文件")
+            progress_callback(f"目录内容: {list(output_dir.iterdir())[:5]}")
         return None
         
     except subprocess.TimeoutExpired:
