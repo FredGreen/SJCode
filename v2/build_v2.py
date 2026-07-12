@@ -48,8 +48,10 @@ def check_dependencies():
 
 def build_exe():
     """构建 exe"""
+    # v2 目录
+    v2_dir = os.path.dirname(os.path.abspath(__file__))
     # 项目根目录
-    root_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(v2_dir)
     os.chdir(root_dir)
     
     # 入口文件
@@ -69,6 +71,10 @@ def build_exe():
     # 添加 config 目录（如果存在）
     if os.path.exists("config"):
         data_files.append(("config", "config"))
+    
+    # 添加 v2/config 目录（如果存在）
+    if os.path.exists("v2/config"):
+        data_files.append(("v2/config", "v2/config"))
     
     # 构建数据文件参数
     add_data = ""
