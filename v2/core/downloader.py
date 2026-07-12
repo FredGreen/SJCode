@@ -21,8 +21,17 @@ from datetime import datetime
 
 # ===================== 配置 =====================
 
+def get_base_dir() -> Path:
+    """获取基础目录（支持打包后的 exe）"""
+    if getattr(sys, 'frozen', False):
+        # 打包后的 exe，使用 exe 所在目录
+        return Path(sys.executable).parent
+    else:
+        # 开发模式，使用项目根目录
+        return Path(__file__).resolve().parent.parent.parent
+
 # 项目根目录
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = get_base_dir()
 BASE_DIR = PROJECT_ROOT
 
 # 默认输出目录

@@ -105,6 +105,40 @@ dist/SJCode_V2.exe
 
 打包完成后，将 `dist/SJCode_V2.exe` 发给用户即可。
 
+### 用户使用说明
+
+1. **将 exe 放到任意目录**（如 `D:\SJCode\`）
+
+2. **创建 config 目录**（用于存放 cookies）：
+   ```
+   D:\SJCode\
+   ├── SJCode_V2.exe
+   └── config\
+       └── cookies.txt    ← 用户通过 UI 上传或手动放置
+   ```
+
+3. **运行 exe**：
+   - 双击 `SJCode_V2.exe` 即可运行
+   - 程序会在 exe 所在目录自动创建 `output` 目录
+
+4. **上传 Cookies**：
+   - 在程序中使用「Cookie 管理」功能上传
+   - 或手动将 cookies.txt 放到 `config\` 目录
+
+### 目录结构
+
+运行后会自动创建：
+```
+D:\SJCode\
+├── SJCode_V2.exe
+├── config\
+│   └── cookies.txt       ← B站 cookies
+└── output\
+    ├── v2_videos\        ← 下载的视频
+    ├── v2_docs\          ← 生成的 Markdown 文档
+    └── v2_asr_cache\     ← ASR 缓存
+```
+
 用户无需安装 Python，直接运行 exe 即可使用。
 
 ## 注意事项
