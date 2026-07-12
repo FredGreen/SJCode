@@ -76,6 +76,17 @@ def build_exe():
     if os.path.exists("v2/config"):
         data_files.append(("v2/config", "v2/config"))
     
+    # 添加 whisper 资源文件
+    try:
+        import whisper
+        whisper_path = os.path.dirname(whisper.__file__)
+        assets_path = os.path.join(whisper_path, "assets")
+        if os.path.exists(assets_path):
+            data_files.append((assets_path, "whisper/assets"))
+            print(f"✓ 添加 whisper 资源: {assets_path}")
+    except Exception as e:
+        print(f"⚠ 无法添加 whisper 资源: {e}")
+    
     # 构建数据文件参数
     add_data = ""
     for src, dst in data_files:
