@@ -157,6 +157,27 @@ def transcribe_with_whisper(
     
     try:
         import whisper
+        import io
+        
+        # 创建自定义输出流，用于捕获 Whisper 的进度输出
+        class ProgressCapture:
+            def __init__(self, callback):
+                self.callback = callback
+                self.buffer = ""
+            
+            def write(self, text):
+                self.buffer += text
+                # 按行输出
+                while '\n' in self.buffer:
+                    line, self.buffer = self.buffer.split('\n', 1)
+                    line = line.strip()
+                    if line and self.callback:
+                        self.callback(f"  [Whisper] {line}")
+            
+            def flush(self):
+                if self.buffer.strip() and self.callback:
+                    self.callback(f"  [Whisper] {self.buffer.strip()}")
+                self.buffer = ""
         
         # 确保 stdout/stderr 不为 None（打包后可能为 None）
         if sys.stdout is None:
@@ -169,11 +190,13 @@ def transcribe_with_whisper(
         model_obj = whisper.load_model(model)
         
         if progress_callback:
-            progress_callback("开始识别...")
+            progress_callback("开始识别（这可能需要几分钟）...")
+        
+        # 使用 verbose=True 显示进度
         result = model_obj.transcribe(
             audio_path,
             language=WHISPER_LANGUAGE,
-            verbose=False
+            verbose=True
         )
         
         sentences = []
@@ -217,18 +240,37 @@ def _call_deepseek(prompt: str, progress_callback=None) -> str:
     
     if progress_callback:
         progress_callback(f"调用 {DEEPSEEK_MODEL}...")
+        progress_callback(f"  请求长度: {len(prompt)} 字符")
     
-    response = requests.post(
-        f"{DEEPSEEK_BASE_URL}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=120
-    )
-    
-    if response.status_code != 200:
-        raise RuntimeError(f"DeepSeek API 失败: {response.status_code}")
-    
-    return response.json()["choices"][0]["message"]["content"].strip()
+    try:
+        response = requests.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
+        if progress_callback:
+            progress_callback(f"  响应状态: {response.status_code}")
+        
+        if response.status_code != 200:
+            error_msg = response.text[:200] if response.text else "未知错误"
+            raise RuntimeError(f"DeepSeek API 失败: {response.status_code}\n{error_msg}")
+        
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        
+        if progress_callback:
+            # 获取 token 使用情况
+            usage = result.get("usage", {})
+            progress_callback(f"  Token 使用: {usage.get('total_tokens', '未知')}")
+        
+        return content
+        
+    except requests.exceptions.Timeout:
+        raise RuntimeError("DeepSeek API 请求超时（120秒）")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"DeepSeek API 网络错误: {e}")
 
 
 def _extract_json(content: str) -> dict:
