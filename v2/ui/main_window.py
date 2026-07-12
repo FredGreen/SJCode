@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
             self.excel_data = []
             for row in ws.iter_rows(min_row=2, values_only=True):
                 data = dict(zip(headers, row))
-                bvid = str(data.get("视频讯号") or data.get("bvid") or "").strip()
+                bvid = str(data.get("视频讯号(bvid)") or data.get("视频讯号") or data.get("bvid") or "").strip()
                 if not bvid:
                     continue
                 
@@ -211,6 +211,8 @@ class MainWindow(QMainWindow):
                     "title": str(data.get("视频标题") or data.get("title") or "").strip(),
                     "author": str(data.get("视频作者") or data.get("author") or "").strip(),
                     "duration": str(data.get("播放时长") or data.get("duration") or "").strip(),
+                    "category": str(data.get("类别") or data.get("category") or "").strip(),
+                    "keyword": str(data.get("检索关键词") or data.get("keyword") or "").strip(),
                     "url": f"https://www.bilibili.com/video/{bvid}",
                 })
             
