@@ -36,7 +36,7 @@ PROJECT_ROOT = get_base_dir()
 BASE_DIR = PROJECT_ROOT
 
 # DeepSeek 配置
-DEEPSEEK_API_KEY = "sk-d2e27860aa3243668a95a85e2bf8edcb"
+DEEPSEEK_API_KEY = "sk-e25608a81abf4f25a2037489d3bd92af"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
 
