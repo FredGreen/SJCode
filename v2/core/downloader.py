@@ -187,65 +187,48 @@ def download_video(
         progress_callback(f"开始下载: {title[:50]}...")
         progress_callback(f"URL: {url}")
     
-    # yt-dlp 下载命令
-    cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "-f", "bestvideo+bestaudio/best",
-        "--merge-output-format", "mp4",
-        "-o", output_template,
-        "--no-playlist",
-        "--socket-timeout", "15",
-        "--retries", "3",
-        "--no-check-certificates",
-    ]
+    # 使用 yt_dlp Python API 直接调用（打包后也能正常工作）
+    ydl_opts = {
+        'format': 'bestvideo+bestaudio/best',
+        'merge_output_format': 'mp4',
+        'outtmpl': output_template,
+        'noplaylist': True,
+        'socket_timeout': 15,
+        'retries': 3,
+        'no_check_certificates': True,
+        'quiet': False,
+        'no_warnings': False,
+    }
     
     # 添加 ffmpeg 路径
     ffmpeg_path = _find_ffmpeg()
     if ffmpeg_path:
-        cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
+        ydl_opts['ffmpeg_location'] = os.path.dirname(ffmpeg_path)
     
     # 添加 cookies
     if cookie_file.exists():
         if progress_callback:
             progress_callback(f"使用cookies: {cookie_file}")
-        cmd.extend(["--cookies", str(cookie_file)])
+        ydl_opts['cookiefile'] = str(cookie_file)
     else:
         if progress_callback:
             progress_callback(f"警告: cookies文件不存在")
     
-    cmd.append(url)
+    # 进度回调
+    if progress_callback:
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                percent = d.get('_percent_str', '0%')
+                speed = d.get('_speed_str', '')
+                progress_callback(f"  下载中: {percent} {speed}")
+            elif d['status'] == 'finished':
+                progress_callback(f"  下载完成，正在处理...")
+        ydl_opts['progress_hooks'] = [progress_hook]
     
     try:
-        if progress_callback:
-            progress_callback(f"开始下载...")
-        
-        # 使用 Popen 实时获取输出
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            encoding='utf-8',
-            errors='ignore',
-            bufsize=1,
-            universal_newlines=True
-        )
-        
-        # 实时读取输出
-        output_lines = []
-        for line in process.stdout:
-            line = line.strip()
-            if line:
-                output_lines.append(line)
-                # 显示进度（每 5 行显示一次）
-                if len(output_lines) % 5 == 0 and progress_callback:
-                    progress_callback(f"  {line[:80]}")
-        
-        process.wait(timeout=YTDLP_TIMEOUT)
-        
-        if process.returncode != 0:
-            if progress_callback:
-                progress_callback(f"下载失败: {output_lines[-3:] if output_lines else '未知错误'}")
-            return None
+        import yt_dlp
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
         
         if progress_callback:
             progress_callback("下载完成，检查文件...")
