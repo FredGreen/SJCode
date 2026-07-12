@@ -227,7 +227,7 @@ class MainWindow(QMainWindow):
             self.download_all_btn.setEnabled(True)
             
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"读取Excel失败:\n{e}")
+            self.log(f"读取Excel失败: {e}")
     
     def refresh_excel_table(self):
         """刷新Excel表格"""
@@ -279,7 +279,7 @@ class MainWindow(QMainWindow):
         """下载选中的视频"""
         videos = self.get_selected_videos()
         if not videos:
-            QMessageBox.warning(self, "提示", "请先选择要下载的视频")
+            self.log("请先选择要下载的视频")
             return
         
         self.start_download(videos)
@@ -287,7 +287,7 @@ class MainWindow(QMainWindow):
     def download_all(self):
         """下载全部视频"""
         if not self.excel_data:
-            QMessageBox.warning(self, "提示", "没有可下载的视频")
+            self.log("没有可下载的视频")
             return
         
         self.start_download(self.excel_data)
@@ -428,7 +428,7 @@ class MainWindow(QMainWindow):
                         break
         
         if not selected:
-            QMessageBox.warning(self, "提示", "请先选择要转写的视频")
+            self.log("请先选择要转写的视频")
             return
         
         # 开始转写第一个
@@ -460,10 +460,8 @@ class MainWindow(QMainWindow):
         """转写完成"""
         if result["status"] == "success":
             self.video_log.append(f"\n转写完成: {result['markdown_path']}")
-            QMessageBox.information(self, "完成", f"转写完成!\n\n{result['markdown_path']}")
         else:
             self.video_log.append(f"\n转写失败: {result['message']}")
-            QMessageBox.critical(self, "错误", f"转写失败:\n{result['message']}")
         
         # 启用按钮
         self.transcribe_selected_btn.setEnabled(True)
@@ -531,13 +529,13 @@ class MainWindow(QMainWindow):
             
             # 保存到默认位置
             if save_cookies(content):
-                QMessageBox.information(self, "成功", "Cookie上传成功!")
+                self.log("Cookie上传成功!")
                 self.cookie_text.setText(content)
             else:
-                QMessageBox.critical(self, "错误", "Cookie保存失败!")
+                self.log("Cookie保存失败!")
         
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"上传失败:\n{e}")
+            self.log(f"上传失败: {e}")
     
     def view_cookie(self):
         """查看当前Cookie"""
